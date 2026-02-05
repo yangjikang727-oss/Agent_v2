@@ -36,10 +36,10 @@ export function calculateEventHeight(
   const endH = endParts[0] || 0
   const endM = endParts[1] || 0
   
-  let durationMin = (endH * 60 + endM) - (startH * 60 + startM)
-  if (durationMin < minHeight) durationMin = minHeight
-  
-  return (durationMin / 60) * hourHeight
+  const durationMin = (endH * 60 + endM) - (startH * 60 + startM)
+  const calculatedHeight = (durationMin / 60) * hourHeight
+
+  return Math.max(calculatedHeight, minHeight)
 }
 
 /**
