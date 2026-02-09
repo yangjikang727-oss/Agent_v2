@@ -38,6 +38,8 @@ import TaskStack from './components/dashboard/TaskStack.vue'
 import DetailModal from './components/modals/DetailModal.vue'
 import ConfigModal from './components/modals/ConfigModal.vue'
 import CreateMeetingModal from './components/modals/CreateMeetingModal.vue'
+import TripApplication from './components/chat/TripApplication.vue'
+import { TripFormManager } from './services/react/tripFormManager'
 
 // Stores
 const scheduleStore = useScheduleStore()
@@ -56,6 +58,20 @@ const selectedEvent = ref<Schedule | null>(null)
 const showConfigModal = ref(false)
 const showCreateMeetingModal = ref(false)
 const createMeetingData = ref<Record<string, any>>({})
+const showTripApplication = ref(false)  // 出差申请表单显示控制
+const currentTripFormData = ref<import('./types').TripApplicationData>({
+  scheduleId: '',
+  taskId: '',
+  startDate: '',
+  startTime: '',
+  endDate: '',
+  endTime: '',
+  from: '',
+  to: '',
+  transport: '',
+  reason: '',
+  status: 'draft'
+})
 const showProcessing = ref(false)
 const currentActionType = ref('')
 
@@ -287,15 +303,27 @@ async function processInputWithReAct(text: string) {
       if (result.steps.length > 0) {
         console.log('[ReAct] 推理步骤:', result.steps)
         
-        // 检查是否有创建会议的动作
+        // 检查是否有创建会议或出差申请的动作
         const createMeetingStep = result.steps.find(step => 
           step.action === 'open_create_meeting_modal'
         )
         
+        const createTripStep = result.steps.find(step => 
+          step.action === 'open_trip_application_modal'
+        )
+        
         if (createMeetingStep && createMeetingStep.actionInput) {
-          // 设置模态框数据并显示
+          // 设置会议模态框数据并显示
           createMeetingData.value = createMeetingStep.actionInput.formData || {}
           showCreateMeetingModal.value = true
+        } else if (createTripStep && createTripStep.actionInput) {
+          // 设置出差申请模态框数据并显示
+          currentTripFormData.value = {
+            ...createTripStep.actionInput.formData,
+            id: createTripStep.actionInput.taskId || `TRIP-${Date.now()}`,
+            status: 'draft'
+          }
+          showTripApplication.value = true
         }
       }
     } else {
@@ -1409,6 +1437,54 @@ function handleCreateMeetingSubmit(data: any) {
   createMeetingData.value = {}
 }
 
+// 处理出差申请提交
+function handleTripApplicationSubmit(data: import('./types').TripApplicationData) {
+  console.log('[App] 出差申请提交:', data)
+  
+  // 使用TripFormManager创建日程
+  const schedule = TripFormManager.createScheduleFromForm({
+    startDate: data.startDate,
+    startTime: data.startTime,
+    endDate: data.endDate,
+    endTime: data.endTime,
+    from: data.from,
+    to: data.to,
+    transport: data.transport as import('./types').TransportMode,
+    reason: data.reason
+  }, data.scheduleId || `TRIP-${Date.now()}`)
+  
+  // 添加到日程存储
+  scheduleStore.addSchedule(schedule)
+  
+  // 显示成功消息
+  messageStore.addSystemMessage(`✅ 出差申请提交成功：${data.from} → ${data.to}`)
+  
+  // 关闭模态框
+  showTripApplication.value = false
+  
+  // 重置表单数据
+  currentTripFormData.value = {
+    scheduleId: '',
+    taskId: '',
+    startDate: '',
+    startTime: '',
+    endDate: '',
+    endTime: '',
+    from: '',
+    to: '',
+    transport: '',
+    reason: '',
+    status: 'draft'
+  }
+}
+
+// 处理出差表单字段更新
+function handleTripFieldUpdate(field: string, value: string) {
+  if (currentTripFormData.value) {
+    (currentTripFormData.value as any)[field] = value
+  }
+}
+
 function handleToggleScenarioSkill(scenarioCode: string, skillCode: string) {
   configStore.toggleScenarioSkill(scenarioCode, skillCode)
 }
@@ -1566,6 +1642,23 @@ onUnmounted(() => {
       @close="showCreateMeetingModal = false"
       @submit="handleCreateMeetingSubmit"
     />
+
+    <!-- Trip Application Modal -->
+    <Teleport to="body">
+      <div 
+        v-if="showTripApplication" 
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+        @click.self="showTripApplication = false"
+      >
+        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
+          <TripApplication 
+            :data="currentTripFormData"
+            @submit="handleTripApplicationSubmit"
+            @update-field="handleTripFieldUpdate"
+          />
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Processing Overlay -->
     <div 

@@ -28,6 +28,134 @@ export class SmartParamCollector {
   private static states: Map<string, CollectionState> = new Map()
   
   /**
+   * 收集出差参数（大模型驱动版本）
+   */
+  static async collectTripParams(
+    sessionId: string,
+    query: string,
+    llmConfig: LLMConfig
+  ): Promise<CollectionResult> {
+    // 获取或创建会话状态
+    let state = this.states.get(sessionId)
+    if (!state) {
+      state = {
+        params: {},
+        askedQuestions: new Set(),
+        history: []
+      }
+      this.states.set(sessionId, state)
+    }
+    
+    // 将当前查询添加到历史
+    state.history.push(query)
+    
+    console.log(`[SmartParamCollector] 处理出差会话 ${sessionId}, 历史长度: ${state.history.length}`)
+    
+    // 1. 使用大模型提取参数
+    const extractionResult = await LLMParamExtractor.hybridExtract(
+      query,
+      llmConfig,
+      state.params  // 传入已有参数作为fallback
+    )
+    
+    console.log(`[SmartParamCollector] LLM提取结果:`, extractionResult)
+    
+    // 2. 合并提取的参数到状态中
+    Object.assign(state.params, extractionResult.params)
+    
+    // 3. 特殊处理：从完整对话历史中提取信息
+    if (state.history.length > 1) {
+      const fullHistory = state.history.join('\n')
+      const historyExtraction = await LLMParamExtractor.hybridExtract(
+        fullHistory,
+        llmConfig,
+        state.params
+      )
+      
+      // 用历史提取结果补充当前参数
+      Object.assign(state.params, historyExtraction.params)
+      console.log(`[SmartParamCollector] 历史提取补充:`, historyExtraction.params)
+    }
+    
+    // 4. 确保基本参数（兜底处理）
+    if (!state.params.startDate) {
+      state.params.startDate = new Date().toISOString().split('T')[0]
+    }
+    
+    if (!state.params.endDate) {
+      // 默认出差一天
+      const nextDay = new Date()
+      nextDay.setDate(nextDay.getDate() + 1)
+      state.params.endDate = nextDay.toISOString().split('T')[0]
+    }
+    
+    // 5. 计算结束时间
+    if (state.params.startTime && !state.params.endTime) {
+      // 默认出差8小时
+      const timeParts = state.params.startTime.split(':')
+      if (timeParts.length === 2) {
+        const hours = parseInt(timeParts[0])
+        const minutes = parseInt(timeParts[1])
+        const totalMinutes = hours * 60 + minutes + (8 * 60)
+        const endHours = Math.floor(totalMinutes / 60) % 24
+        const endMinutes = totalMinutes % 60
+        state.params.endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`
+      }
+    }
+    
+    // 6. 确定缺失的参数
+    const requiredParams = ['from', 'to', 'startDate', 'startTime', 'endDate', 'endTime', 'transport', 'reason']
+    const missing: string[] = []
+    
+    for (const param of requiredParams) {
+      if (!state.params[param] || 
+          (Array.isArray(state.params[param]) && state.params[param].length === 0) ||
+          (typeof state.params[param] === 'string' && state.params[param].trim() === '')) {
+        missing.push(param)
+      }
+    }
+    
+    const canExecute = missing.length === 0
+    
+    // 7. 生成下一个问题（避免重复询问）
+    let nextQuestion: string | undefined
+    if (!canExecute && missing.length > 0) {
+      // 按优先级排序的问题顺序
+      const questionOrder = ['from', 'to', 'startDate', 'startTime', 'endDate', 'endTime', 'transport', 'reason']
+      
+      // 找到第一个未问过且确实缺失的问题
+      for (const param of questionOrder) {
+        if (missing.includes(param) && !state.askedQuestions.has(param)) {
+          state.askedQuestions.add(param)
+          state.currentQuestion = param
+          nextQuestion = this.getTripQuestionText(param)
+          break
+        }
+      }
+      
+      // 如果所有问题都问过了，给出总结
+      if (!nextQuestion) {
+        const missingText = missing.map(p => this.getTripParamDisplayName(p)).join('、')
+        nextQuestion = `还需要确认以下信息：${missingText}。请提供具体信息。`
+      }
+    } else if (canExecute) {
+      // 所有参数都已收集，准备确认
+      nextQuestion = '所有信息已收集完毕，是否确认提交出差申请？'
+    }
+    
+    return { 
+      params: state.params, 
+      missing, 
+      canExecute,
+      nextQuestion,
+      extractionInfo: {
+        confidence: extractionResult.confidence,
+        reasoning: extractionResult.reasoning
+      }
+    }
+  }
+  
+  /**
    * 收集会议参数（大模型驱动版本）
    */
   static async collectMeetingParams(
@@ -152,6 +280,40 @@ export class SmartParamCollector {
   static resetSession(sessionId: string) {
     this.states.delete(sessionId)
     console.log(`[SmartParamCollector] 重置会话: ${sessionId}`)
+  }
+  
+  /**
+   * 获取出差问题文本
+   */
+  private static getTripQuestionText(param: string): string {
+    const questions: Record<string, string> = {
+      'from': '请问从哪里出发？',
+      'to': '请问出差去哪里？',
+      'startDate': '请问出差开始日期是？',
+      'startTime': '请问出发时间是几点？',
+      'endDate': '请问返程日期是？',
+      'endTime': '请问预计返程时间是几点？',
+      'transport': '请问选择什么交通方式？',
+      'reason': '请简单说明出差事由：'
+    }
+    return questions[param] || `请提供${this.getTripParamDisplayName(param)}信息：`
+  }
+  
+  /**
+   * 获取出差参数显示名称
+   */
+  private static getTripParamDisplayName(param: string): string {
+    const names: Record<string, string> = {
+      'from': '出发地',
+      'to': '目的地',
+      'startDate': '开始日期',
+      'startTime': '出发时间',
+      'endDate': '结束日期',
+      'endTime': '返程时间',
+      'transport': '交通方式',
+      'reason': '出差说明'
+    }
+    return names[param] || param
   }
   
   /**

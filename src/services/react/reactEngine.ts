@@ -74,14 +74,21 @@ export class ReActEngine {
         ? this.buildHistoryContext(context.conversationHistory)
         : ''
       
-      // 1. 简化意图识别 - 只关注会议日程
+      // 1. 简化意图识别 - 识别会议和出差日程
       const isMeetingIntent = this.isMeetingRelated(query)
+      const isTripIntent = this.isTripRelated(query)
       
       console.log('[ReActEngine] 会议意图识别结果:', isMeetingIntent)
+      console.log('[ReActEngine] 出差意图识别结果:', isTripIntent)
       
       // 2. 如果是会议日程，无条件直接触发创建会议技能
       if (isMeetingIntent) {
         return await this.handleMeetingIntent(query, context, toolContext)
+      }
+      
+      // 3. 如果是出差日程，无条件直接触发出差申请技能
+      if (isTripIntent) {
+        return await this.handleTripIntent(query, context, toolContext)
       }
       
       // 3. 其他情况使用传统ReAct推理
@@ -192,6 +199,64 @@ export class ReActEngine {
     return meetingKeywords.some(keyword => lowerQuery.includes(keyword))
   }
 
+  /**
+   * 简单判断是否为出差相关意图
+   */
+  private isTripRelated(query: string): boolean {
+    const tripKeywords = [
+      '出差', '飞', '前往', '机票', '酒店', '住宿', '旅行', '外出',
+      '出发', '目的地', '行程', '交通', '航班', '火车', '汽车', '轮船',
+      '去', '到', '往', '赴'
+    ]
+    
+    const lowerQuery = query.toLowerCase()
+    return tripKeywords.some(keyword => lowerQuery.includes(keyword))
+  }
+
+  // ==================== 出差处理方法（零提示版）====================
+
+  /**
+   * 处理出差意图（零提示即时响应版）
+   * 严格按照用户要求：出差申请字段 + 零提示 + 直接触发
+   */
+  private async handleTripIntent(
+    query: string,
+    context: any,
+    toolContext: any
+  ): Promise<any> {
+    const sessionId = context.userId || 'default_session'
+    
+    // 1. 智能参数收集
+    const { params, missing, canExecute, nextQuestion, extractionInfo } = 
+      await SmartParamCollector.collectTripParams(sessionId, query, this.llmConfig)
+    
+    console.log('[ReActEngine] 出差参数收集结果:', { params, missing, canExecute })
+    
+    // 2. 无条件直接触发出差申请技能（零提示即时响应）
+    // 直接生成完整的出差申请表单，不显示任何提示信息
+    return {
+      finalAnswer: ' ',  // 单个空格，确保前端能检测到响应
+      steps: [{
+        thought: '无条件触发出差申请技能',
+        action: 'open_trip_application_modal',
+        actionInput: {
+          formData: {
+            startDate: params.startDate || '',
+            startTime: params.startTime || '',
+            endDate: params.endDate || '',
+            endTime: params.endTime || '',
+            from: params.from || '',
+            to: params.to || '',
+            transport: params.transport || '',
+            reason: params.reason || ''
+          },
+          taskId: `TRIP-${Date.now()}`
+        }
+      }],
+      success: true
+    }
+  }
+
   // ==================== 会议处理方法（零提示版）====================
 
   /**
@@ -214,7 +279,7 @@ export class ReActEngine {
     // 2. 无条件直接触发创建会议技能（零提示即时响应）
     // 直接生成完整的会议创建表单，不显示任何提示信息
     return {
-      finalAnswer: '',  // 零提示，不显示任何文字
+      finalAnswer: ' ',  // 单个空格，确保前端能检测到响应
       steps: [{
         thought: '无条件触发创建会议技能',
         action: 'open_create_meeting_modal',
