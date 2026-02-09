@@ -165,6 +165,22 @@ async function createSchedule(ctx: {
     })
     taskStore.addTasks(newTasks)
     messageStore.addDataMessage('action_list', '✅ 已创建', newTasks, thoughts)
+    
+    // ==================== AI原生执行闭环：自动执行推荐类技能 ====================
+    // 可自动执行的技能列表（推荐类、非破坏性）
+    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport', 'check_hotel']
+    
+    // 延迟500ms后自动执行推荐类技能
+    setTimeout(async () => {
+      for (const task of newTasks) {
+        if (AUTO_EXECUTABLE_SKILLS.includes(task.skill)) {
+          console.log(`[AI原生闭环] 自动执行技能: ${task.title}`)
+          await handleExecuteTask(task)
+          // 每个技能之间间隔300ms，避免UI卡顿
+          await new Promise(r => setTimeout(r, 300))
+        }
+      }
+    }, 500)
   } else {
     messageStore.addSystemMessage('✅ 已创建', thoughts)
   }
@@ -791,6 +807,8 @@ async function handleExecuteTask(task: Task) {
       taskId: task.id,
       scheduleId: task.scheduleId
     } as import('./types').FlightListData)
+    // AI原生闭环：推荐列表展示后即完成任务，清空堆栈
+    taskStore.completeTask(task.id)
   } else if (result.type === 'ask_hotel_location') {
     // 追问酒店商圈
     brain.setMode('WAIT_HOTEL_LOCATION')
@@ -798,6 +816,8 @@ async function handleExecuteTask(task: Task) {
     brain.state.value.draft = { scheduleId: task.scheduleId }
     brain.state.value.statusText = '等待输入酒店商圈...'
     messageStore.addSystemMessage(result.text || '🏨 请问您希望住在哪个商圈或地点？')
+    // AI原生闭环：已提示用户补充信息，完成当前任务
+    taskStore.completeTask(task.id)
     return
   } else if (result.type === 'hotel_list' && result.data) {
     // 酒店列表结果
@@ -806,6 +826,8 @@ async function handleExecuteTask(task: Task) {
       taskId: task.id,
       scheduleId: task.scheduleId
     } as import('./types').HotelListData)
+    // AI原生闭环：推荐列表展示后即完成任务，清空堆栈
+    taskStore.completeTask(task.id)
   } else if (result.type === 'trip_application' && result.data) {
     // 出差申请表单
     messageStore.addDataMessage('trip_application', '', {
