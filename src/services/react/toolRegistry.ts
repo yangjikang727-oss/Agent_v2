@@ -270,83 +270,156 @@ export class ToolRegistry {
 
 export const toolRegistry = new ToolRegistry()
 
-// ==================== Skill 工具定义（原 skillToolAdapter.ts，已内联） ====================
+// ==================== Skill 工具动态注册 ====================
+// Skill 工具将由 SkillProvider 动态从 SKILL.md 生成并注册
+// 不再使用硬编码的工具定义
 
-/** 会议预定工具 */
-const bookMeetingRoomTool: Tool = {
-  name: 'book_meeting_room',
-  description: '预定会议室，创建会议日程',
-  parameters: [
-    { name: 'title', type: 'string', description: '会议主题', required: true },
-    { name: 'date', type: 'string', description: '会议日期', required: true },
-    { name: 'startTime', type: 'string', description: '开始时间', required: true },
-    { name: 'endTime', type: 'string', description: '结束时间', required: false },
-    { name: 'attendees', type: 'array', description: '参会人员列表', required: true },
-    { name: 'location', type: 'string', description: '会议地点/会议室', required: false }
-  ],
-  category: 'schedule',
-  async execute(params: Record<string, any>, _context: ToolContext): Promise<ToolResult> {
-    try {
-      console.log('[BookMeetingRoomTool] 执行会议预定:', params)
-      const meetingId = `MTG-${Date.now()}`
-      return {
-        success: true,
-        data: {
-          meetingId,
-          title: params.title,
-          date: params.date,
-          time: `${params.startTime} - ${params.endTime || '待定'}`,
-          location: params.location || '待分配',
-          attendees: params.attendees,
-          message: `会议「${params.title}」已创建成功，会议ID: ${meetingId}`
+import { skillStore } from './skills/skillStore'
+
+/**
+ * 从 SKILL.md 动态注册 Skill 工具到 toolRegistry
+ */
+function registerSkillTools(): void {
+  console.log('[ToolRegistry] 开始注册 Skill 工具...')
+  
+  // 加载所有 SKILL.md
+  skillStore.loadAllSkills()
+  
+  // 获取所有 Skill 元数据
+  const allMetadata = skillStore.getAllMetadata()
+  
+  // 为每个 Skill 创建工具
+  for (const metadata of allMetadata) {
+    const tool: Tool = {
+      name: metadata.name,
+      description: metadata.description,
+      parameters: extractParametersFromSkill(metadata.name),
+      category: metadata.category as Tool['category'],
+      requireConfirmation: false,
+      
+      async execute(params: Record<string, any>, _context: ToolContext): Promise<ToolResult> {
+        const startTime = Date.now()
+        
+        try {
+          console.log(`[SkillTool:${metadata.name}] 执行`, params)
+          
+          // 返回成功结果，包含 action 信息
+          // ReAct 引擎将根据 action 触发 UI 动作
+          return {
+            success: true,
+            data: {
+              action: metadata.action,
+              skillName: metadata.name,
+              params,
+              taskId: `${metadata.name.toUpperCase()}-${Date.now()}`,
+              message: `已触发 ${metadata.description}`
+            },
+            metadata: {
+              executionTime: Date.now() - startTime,
+              toolName: metadata.name
+            }
+          }
+        } catch (error) {
+          console.error(`[SkillTool:${metadata.name}] 执行失败`, error)
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : '未知错误',
+            metadata: {
+              executionTime: Date.now() - startTime,
+              toolName: metadata.name
+            }
+          }
         }
       }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : '未知错误' }
     }
+    
+    toolRegistry.registerTool(tool)
+    console.log(`[ToolRegistry] 已注册 Skill 工具: ${metadata.name}`)
   }
+  
+  console.log(`[ToolRegistry] Skill 工具注册完成，共 ${allMetadata.length} 个`)
 }
 
-/** 出差申请工具 */
-const applyBusinessTripTool: Tool = {
-  name: 'apply_business_trip',
-  description: '申请出差，包括交通和住宿安排',
-  parameters: [
-    { name: 'destination', type: 'string', description: '出差目的地', required: true },
-    { name: 'departure', type: 'string', description: '出发城市', required: true },
-    { name: 'startDate', type: 'string', description: '出发日期', required: true },
-    { name: 'endDate', type: 'string', description: '返回日期', required: false },
-    { name: 'reason', type: 'string', description: '出差事由', required: true }
-  ],
-  category: 'schedule',
-  async execute(params: Record<string, any>, _context: ToolContext): Promise<ToolResult> {
-    try {
-      console.log('[ApplyBusinessTripTool] 执行出差申请:', params)
-      const tripId = `TRIP-${Date.now()}`
-      return {
-        success: true,
-        data: {
-          tripId,
-          destination: params.destination,
-          departure: params.departure,
-          startDate: params.startDate,
-          endDate: params.endDate || params.startDate,
-          reason: params.reason,
-          status: '已提交审批',
-          message: `出差申请已提交，申请ID: ${tripId}`
+/**
+ * 从 Skill 的 instruction 中提取参数定义
+ */
+function extractParametersFromSkill(skillName: string): ToolParameter[] {
+  const instruction = skillStore.getInstruction(skillName)
+  if (!instruction) return []
+  
+  const parameters: ToolParameter[] = []
+  const instructions = instruction.instructions
+  
+  // 匹配参数表格（简化版：查找 ## 参数说明 后的所有行）
+  const lines = instructions.split('\n')
+  let inParamTable = false
+  let skipHeaderRow = 0
+  
+  for (const line of lines) {
+    if (line.includes('## 参数说明')) {
+      inParamTable = true
+      continue
+    }
+    
+    if (inParamTable) {
+      // 跳过表头和分隔线
+      if (skipHeaderRow < 2) {
+        skipHeaderRow++
+        continue
+      }
+      
+      // 遇到下一个标题，结束解析
+      if (line.trim().startsWith('##')) {
+        break
+      }
+      
+      // 解析参数行
+      if (line.trim().startsWith('|')) {
+        const cells = line.split('|').map(cell => cell.trim()).filter(Boolean)
+        if (cells.length >= 4) {
+          const name = cells[0]
+          const type = cells[1]
+          const required = cells[2]
+          const description = cells[3]
+          
+          if (name && type && required && description) {
+            parameters.push({
+              name: name.trim(),
+              type: normalizeParamType(type.trim()),
+              description: description.trim(),
+              required: required.trim() === '是'
+            })
+          }
         }
       }
-    } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : '未知错误' }
     }
   }
+  
+  const match = parameters.length > 0
+  
+  if (!match) {
+    console.warn(`[ToolRegistry] Skill "${skillName}" 未找到参数表格`)
+  }
+  
+  return parameters
 }
 
-// 注册 Skill 工具
-console.log('[ToolRegistry] 注册 Skill 工具...')
-toolRegistry.registerTool(bookMeetingRoomTool)
-toolRegistry.registerTool(applyBusinessTripTool)
-console.log('[ToolRegistry] Skill 工具注册完成')
+/**
+ * 规范化参数类型
+ */
+function normalizeParamType(type: string): 'string' | 'number' | 'boolean' | 'array' | 'object' {
+  const lowerType = type.toLowerCase()
+  
+  if (lowerType.includes('array') || lowerType.includes('数组')) return 'array'
+  if (lowerType.includes('number') || lowerType.includes('数字')) return 'number'
+  if (lowerType.includes('bool') || lowerType.includes('布尔')) return 'boolean'
+  if (lowerType.includes('object') || lowerType.includes('对象')) return 'object'
+  
+  return 'string'
+}
+
+// 自动注册 Skill 工具
+registerSkillTools()
 
 // ==================== 工具执行辅助函数 ====================
 

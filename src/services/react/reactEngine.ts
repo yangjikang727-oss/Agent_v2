@@ -11,7 +11,6 @@ import type { LLMConfig } from '../core/llmCore'
 import { callLLMRaw } from '../core/llmCore'
 import { toolRegistry, type ToolContext, type ToolResult } from './toolRegistry'
 import { REACT_PROMPTS, parseReActResponse, formatObservation, type ReActStep } from './reactPrompts'
-import { SmartParamCollector } from './smartCollector'
 import { skillStore } from './skills/skillStore'
 import type { BrainState } from '../../types'
 
@@ -76,22 +75,11 @@ export class ReActEngine {
     }
     
     try {
-      // 确保 Skill 系统已初始化
+      // 确保 Skill 系统已初始化（Skill 作为工具注册到 toolRegistry）
       skillStore.loadAllSkills()
       
-      // ==================== 第一层：元数据匹配 ====================
-      this.log('[第一层] 开始 Skill 意图匹配...')
-      const matchResult = await skillStore.matchSkill(query, this.llmConfig)
-      
-      this.log(`[第一层] 匹配结果: matched=${matchResult.matched}, skill=${matchResult.skillName}, confidence=${matchResult.confidence}`)
-      
-      // 如果匹配到 Skill，走 Skill 驱动流程
-      if (matchResult.matched && matchResult.confidence >= 0.5) {
-        return await this.handleSkillMatch(query, matchResult.skillName, context)
-      }
-      
-      // ==================== 未匹配：传统 ReAct 推理 ====================
-      this.log('[ReAct] 未匹配 Skill，走传统推理循环')
+      // ==================== ReAct 推理循环 ====================
+      this.log('[ReAct] 开始推理循环')
       
       const toolsSummary = toolRegistry.getToolsSummary()
       const historyContext = context.conversationHistory && context.conversationHistory.length > 0
@@ -137,6 +125,31 @@ export class ReActEngine {
             steps[lastIndex].observation = observation
           }
           
+          // 检查是否是 Skill 工具（返回的 data 中包含 action 字段）
+          if (toolResult.success && toolResult.data && toolResult.data.action) {
+            this.log(`✔ 检测到 Skill 工具触发 UI 动作: ${toolResult.data.action}`)
+            
+            // 构建包含 UI动作的 step
+            const uiActionStep: ReActStep = {
+              thought: `执行技能: ${toolResult.data.skillName}`,
+              action: toolResult.data.action,  // UI 动作名（如 open_create_meeting_modal）
+              actionInput: {
+                formData: toolResult.data.params,  // 表单数据
+                taskId: toolResult.data.taskId     // 任务ID
+              },
+              observation: toolResult.data.message
+            }
+            
+            steps.push(uiActionStep)
+            
+            // 直接返回，不再继续 ReAct 循环
+            return {
+              finalAnswer: ' ',  // 空格，确保前端能检测到响应
+              steps,
+              success: true
+            }
+          }
+          
           currentPrompt = REACT_PROMPTS.OBSERVE(observation, toolsSummary)
         } else {
           const finalAnswer = this.extractFinalAnswer(llmResponse)
@@ -159,149 +172,6 @@ export class ReActEngine {
         error: (error as Error).message
       }
     }
-  }
-
-  // ==================== Skill 驱动的通用处理方法 ====================
-
-  /**
-   * 处理 Skill 匹配成功后的流程（第二层 + 第三层）
-   * 替代原来的 handleMeetingIntent / handleTripIntent 硬编码方法
-   */
-  private async handleSkillMatch(
-    query: string,
-    skillName: string,
-    context: any
-  ): Promise<{
-    finalAnswer: string
-    steps: ReActStep[]
-    success: boolean
-    error?: string
-  }> {
-    const sessionId = context.userId || 'default_session'
-    
-    // ==================== 第二层：加载指令 + 提取参数 ====================
-    this.log(`[第二层] 加载 Skill 指令: ${skillName}`)
-    
-    const instruction = skillStore.getInstruction(skillName)
-    if (!instruction) {
-      return {
-        finalAnswer: `技能 "${skillName}" 指令加载失败`,
-        steps: [],
-        success: false,
-        error: '指令加载失败'
-      }
-    }
-    
-    // 使用 Skill 指令引导 LLM 提取参数
-    const extractPrompt = REACT_PROMPTS.SKILL_EXTRACT(
-      instruction.instructions,
-      context.currentDate,
-      query
-    )
-    
-    let extractedParams: Record<string, any> = {}
-    
-    try {
-      const extractResponse = await this.callLLMWithTimeout(extractPrompt)
-      if (extractResponse) {
-        const parsed = this.parseJSON<{ params: Record<string, any> }>(extractResponse)
-        if (parsed && parsed.params) {
-          extractedParams = parsed.params
-          this.log(`[第二层] LLM 参数提取结果: ${JSON.stringify(extractedParams)}`)
-        }
-      }
-    } catch (error) {
-      this.log(`[第二层] LLM 参数提取失败: ${error}`)
-    }
-    
-    // 同时使用 SmartCollector 补充参数（兜底）
-    try {
-      if (skillName === 'book_meeting_room') {
-        const collectorResult = await SmartParamCollector.collectMeetingParams(sessionId, query, this.llmConfig)
-        // 合并：LLM 提取优先，SmartCollector 补充
-        extractedParams = { ...collectorResult.params, ...extractedParams }
-      } else if (skillName === 'apply_business_trip') {
-        const collectorResult = await SmartParamCollector.collectTripParams(sessionId, query, this.llmConfig)
-        extractedParams = { ...collectorResult.params, ...extractedParams }
-      }
-    } catch (error) {
-      this.log(`[第二层] SmartCollector 补充失败: ${error}`)
-    }
-    
-    this.log(`[第二层] 最终参数: ${JSON.stringify(extractedParams)}`)
-    
-    // ==================== 第三层：执行（弹出表单） ====================
-    const action = skillStore.getAction(skillName)
-    if (!action) {
-      return {
-        finalAnswer: `技能 "${skillName}" 未声明 action`,
-        steps: [],
-        success: false,
-        error: 'action 未声明'
-      }
-    }
-    
-    this.log(`[第三层] 触发 UI 动作: ${action}`)
-    
-    // 构建表单数据（根据提取的参数填充）
-    const formData = this.buildFormData(skillName, extractedParams)
-    const taskId = skillName === 'book_meeting_room' 
-      ? `MTG-${Date.now()}` 
-      : `TRIP-${Date.now()}`
-    
-    return {
-      finalAnswer: ' ',  // 空格，确保前端能检测到响应
-      steps: [{
-        thought: `Skill 渐进式披露完成：${skillName}`,
-        action,
-        actionInput: {
-          formData,
-          taskId
-        }
-      }],
-      success: true
-    }
-  }
-
-  /**
-   * 根据 Skill 类型构建表单数据
-   */
-  private buildFormData(skillName: string, params: Record<string, any>): Record<string, any> {
-    if (skillName === 'book_meeting_room') {
-      // datetime-local 输入框需要 YYYY-MM-DDTHH:mm 格式
-      const date = params.date || new Date().toISOString().split('T')[0]
-      const startTimeRaw = params.startTime || ''
-      const endTimeRaw = params.endTime || ''
-      // 拼接日期+时间
-      const startDateTime = startTimeRaw ? `${date}T${startTimeRaw}` : ''
-      const endDateTime = endTimeRaw ? `${date}T${endTimeRaw}` : ''
-
-      return {
-        title: params.title || '',
-        startTime: startDateTime,
-        endTime: endDateTime,
-        location: params.location || '',
-        roomType: params.roomType || '',
-        attendees: params.attendees || [],
-        remarks: params.remarks || ''
-      }
-    }
-    
-    if (skillName === 'apply_business_trip') {
-      return {
-        startDate: params.startDate || '',
-        startTime: params.startTime || '',
-        endDate: params.endDate || '',
-        endTime: params.endTime || '',
-        from: params.from || '',
-        to: params.to || '',
-        transport: params.transport || '',
-        reason: params.reason || ''
-      }
-    }
-    
-    // 通用：直接透传参数
-    return { ...params }
   }
 
   // ==================== 工具执行方法 ====================
