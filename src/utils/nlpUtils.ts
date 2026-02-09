@@ -101,11 +101,15 @@ export function extractTransport(text: string): 'flight' | 'train' | 'car' | 'sh
 
 /**
  * 识别场景类型
+ * 优先级：出差 > 会议
+ * 逻辑：当同时包含出差和会议关键词时（如"出差开会"），判定为出差场景
  */
 export function detectScenarioType(text: string): 'trip' | 'meeting' | 'other' {
-  if (/出差|机票|酒店|去|travel|trip|飞|火车|高铁/.test(text)) {
+  // 优先匹配出差场景（包含出差、交通工具、住宿等关键词）
+  if (/出差|机票|酒店|去.{1,5}(?:市|省|区)|travel|trip|飞|火车|高铁/.test(text)) {
     return 'trip'
   }
+  // 其次匹配会议场景（仅当不是出差的情况下）
   if (/会议|讨论|meet|复盘|沟通|开会|约|聊/.test(text)) {
     return 'meeting'
   }

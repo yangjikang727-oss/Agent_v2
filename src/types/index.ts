@@ -13,6 +13,7 @@ export type BrainMode =
   | 'WAIT_TRIP_INFO'       // 等待出差信息补充
   | 'WAIT_HOTEL_LOCATION'  // 等待酒店商圈输入
   | 'CONFIRM_CONFLICT'
+  | 'WAIT_AUTO_EXEC_CONFIRM'  // 等待自动执行推荐技能的确认
 
 // AI 大脑状态
 export interface BrainState {
@@ -41,6 +42,7 @@ export interface ScheduleDraft {
   transport?: import('./schedule').TransportMode
   hotelLocation?: string  // 酒店商圈/地点
   scheduleId?: string     // 关联的日程ID
+  autoExecTaskIds?: string[]  // 待自动执行的任务ID列表
 }
 
 // Gemini 意图解析结果

@@ -11,7 +11,8 @@ import type {
   ParamConfirmData,
   ScheduleListData,
   IntentData,
-  TransportMode
+  TransportMode,
+  BrainMode
 } from './types'
 
 // Stores
@@ -165,22 +166,22 @@ async function createSchedule(ctx: {
     })
     taskStore.addTasks(newTasks)
     messageStore.addDataMessage('action_list', '✅ 已创建', newTasks, thoughts)
-    
-    // ==================== AI原生执行闭环：自动执行推荐类技能 ====================
-    // 可自动执行的技能列表（推荐类、非破坏性）
-    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport', 'check_hotel']
-    
-    // 延迟500ms后自动执行推荐类技能
-    setTimeout(async () => {
-      for (const task of newTasks) {
-        if (AUTO_EXECUTABLE_SKILLS.includes(task.skill)) {
-          console.log(`[AI原生闭环] 自动执行技能: ${task.title}`)
-          await handleExecuteTask(task)
-          // 每个技能之间间隔300ms，避免UI卡顿
-          await new Promise(r => setTimeout(r, 300))
-        }
+
+    // 出差场景：在自动执行推荐类技能前先统一确认
+    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport']
+    if ((ctx.scenarioCode || '') === 'TRIP') {
+      const autoTasks = newTasks.filter(task => AUTO_EXECUTABLE_SKILLS.includes(task.skill))
+      if (autoTasks.length > 0) {
+        brain.setMode('WAIT_AUTO_EXEC_CONFIRM')
+        brain.setDraft({
+          scheduleId: schedule.id,
+          autoExecTaskIds: autoTasks.map(t => t.id)
+        })
+        messageStore.addSystemMessage(
+        '已为你创建差旅日程，并生成交通安排等任务，需要我现在自动帮你跑一遍推荐吗？（回复“是”或“否”）'
+        )
       }
-    }, 500)
+    }
   } else {
     messageStore.addSystemMessage('✅ 已创建', thoughts)
   }
@@ -309,7 +310,6 @@ async function processInputWithReAct(text: string) {
     
     if (result.success) {
       brain.finishReAct(result.finalAnswer)
-      messageStore.addSystemMessage(result.finalAnswer)
       
       // 8. 记录助手回复
       contextManager.addMessage(sessionId, 'assistant', result.finalAnswer)
@@ -317,10 +317,11 @@ async function processInputWithReAct(text: string) {
       // 9. 更新状态
       contextManager.transition(sessionId, 'intent_recognized')
       
+      // 检查是否有创建会议或出差申请的动作
+      let hasModalAction = false
       if (result.steps.length > 0) {
         console.log('[ReAct] 推理步骤:', result.steps)
         
-        // 检查是否有创建会议或出差申请的动作
         const createMeetingStep = result.steps.find(step => 
           step.action === 'open_create_meeting_modal'
         )
@@ -330,18 +331,23 @@ async function processInputWithReAct(text: string) {
         )
         
         if (createMeetingStep && createMeetingStep.actionInput) {
-          // 设置会议模态框数据并显示
           createMeetingData.value = createMeetingStep.actionInput.formData || {}
           showCreateMeetingModal.value = true
+          hasModalAction = true
         } else if (createTripStep && createTripStep.actionInput) {
-          // 设置出差申请模态框数据并显示
           currentTripFormData.value = {
             ...createTripStep.actionInput.formData,
             id: createTripStep.actionInput.taskId || `TRIP-${Date.now()}`,
             status: 'draft'
           }
           showTripApplication.value = true
+          hasModalAction = true
         }
+      }
+      
+      // 只有非弹窗场景且 finalAnswer 有内容时才添加消息
+      if (!hasModalAction && result.finalAnswer && result.finalAnswer.trim()) {
+        messageStore.addSystemMessage(result.finalAnswer)
       }
     } else {
       brain.resetReAct()
@@ -362,6 +368,44 @@ async function processInputWithReAct(text: string) {
 
 // 处理用户输入（传统模式）
 async function processInput(text: string) {
+  // 处理统一自动执行确认
+  if (brain.state.value.mode === 'WAIT_AUTO_EXEC_CONFIRM' && brain.state.value.draft?.scheduleId) {
+    const reply = text.trim().toLowerCase()
+
+    // 否定优先判断，避免"不是"被识别为同意
+    if (/不|否|算了/.test(reply)) {
+      messageStore.addSystemMessage('好的，这些任务会保留在待办列表中，你可以随时点击执行。')
+      brain.reset()
+      return
+    }
+
+    if (/是|好|ok|行|可以/.test(reply)) {
+      const draft = brain.state.value.draft
+      const ids = draft.autoExecTaskIds || []
+      const tasksToRun = taskStore.pendingTasks.filter(t => ids.includes(t.id))
+
+      if (tasksToRun.length === 0) {
+        messageStore.addSystemMessage('当前没有可自动执行的任务。')
+        brain.reset()
+        return
+      }
+
+      brain.startThinking('执行推荐技能...')
+      // 顺序执行推荐类技能
+      for (const task of tasksToRun) {
+        await handleExecuteTask(task)
+        await new Promise(r => setTimeout(r, 300))
+      }
+      brain.stopThinking()
+      brain.reset()
+      return
+    }
+
+    // 无法识别的输入，提示用户按规范回复
+    messageStore.addSystemMessage('如果需要我自动执行这些任务，请回复“是”或“好”；如果不需要，请回复“不要”或“算了”。')
+    return
+  }
+
   brain.startThinking()
   
   const time = extractTime(text)
@@ -729,6 +773,22 @@ function parseIntentByRegex(text: string, currentDate: string): IntentData | nul
 function handleSend(text: string) {
   messageStore.addUserMessage(text)
   
+  // 优先处理特殊模式（与 ReAct/传统模式无关）
+  // 这些模式均为等待用户补充信息的中间状态，需要统一由 processInput 处理
+  const specialModes: BrainMode[] = [
+    'WAIT_AUTO_EXEC_CONFIRM',
+    'WAIT_HOTEL_LOCATION',
+    'WAIT_TIME',
+    'WAIT_CONTENT',
+    'WAIT_ATTENDEES',
+    'WAIT_TRIP_INFO',
+    'CONFIRM_CONFLICT'
+  ]
+  if (specialModes.includes(brain.state.value.mode)) {
+    processInput(text)
+    return
+  }
+  
   // 根据模式选择处理方式
   if (useReActMode.value) {
     processInputWithReAct(text)
@@ -787,6 +847,17 @@ async function handleExecuteTask(task: Task) {
       scheduleId: task.scheduleId
     } as AttendeeTableData)
   } else if (result.type === 'resource_card' && result.data) {
+    // 资源卡片（如汽车、轮船等交通推荐）
+    const resourceData = result.data as ResourceCardData
+    // 如果是交通资源，添加提示语
+    if (resourceData.resourceType === 'transport') {
+      const schedule = scheduleStore.getSchedule(task.scheduleId)
+      const from = schedule?.meta?.from || ''
+      const to = schedule?.meta?.to || schedule?.location || ''
+      if (from && to) {
+        messageStore.addSystemMessage(`🚗 以下是根据您的行程（${from} → ${to}）为您推荐的交通方式，请确认：`)
+      }
+    }
     messageStore.addDataMessage('resource_card', '', {
       ...result.data,
       taskId: task.id,
@@ -802,13 +873,16 @@ async function handleExecuteTask(task: Task) {
     } as TransportSelectorData)
   } else if (result.type === 'flight_list' && result.data) {
     // 航班列表结果
+    const flightData = result.data as import('./types').FlightListData
+    messageStore.addSystemMessage(`✈️ 以下是根据您的行程（${flightData.from} → ${flightData.to}）为您推荐的航班，请选择：`)
     messageStore.addDataMessage('flight_list', '', {
       ...result.data,
       taskId: task.id,
-      scheduleId: task.scheduleId
+      scheduleId: task.scheduleId,
+      selected: null,
+      locked: false
     } as import('./types').FlightListData)
-    // AI原生闭环：推荐列表展示后即完成任务，清空堆栈
-    taskStore.completeTask(task.id)
+    // 任务保留，等用户确认航班后再完成（handleConfirmFlight 中完成）
   } else if (result.type === 'ask_hotel_location') {
     // 追问酒店商圈
     brain.setMode('WAIT_HOTEL_LOCATION')
@@ -816,18 +890,18 @@ async function handleExecuteTask(task: Task) {
     brain.state.value.draft = { scheduleId: task.scheduleId }
     brain.state.value.statusText = '等待输入酒店商圈...'
     messageStore.addSystemMessage(result.text || '🏨 请问您希望住在哪个商圈或地点？')
-    // AI原生闭环：已提示用户补充信息，完成当前任务
-    taskStore.completeTask(task.id)
+    // 任务保留，等用户确认酒店后再完成
     return
   } else if (result.type === 'hotel_list' && result.data) {
     // 酒店列表结果
+    const hotelData = result.data as import('./types').HotelListData
+    messageStore.addSystemMessage(`🏨 以下是根据您的选择（${hotelData.location}商圈）为您推荐的酒店，请选择：`)
     messageStore.addDataMessage('hotel_list', '', {
       ...result.data,
       taskId: task.id,
       scheduleId: task.scheduleId
     } as import('./types').HotelListData)
-    // AI原生闭环：推荐列表展示后即完成任务，清空堆栈
-    taskStore.completeTask(task.id)
+    // 任务保留，等用户确认酒店后再完成（handleConfirmHotel 中完成）
   } else if (result.type === 'trip_application' && result.data) {
     // 出差申请表单
     messageStore.addDataMessage('trip_application', '', {
@@ -873,6 +947,27 @@ function handleConfirmResource(data: ResourceCardData, msgId: number) {
             confirmed: false
           } as import('./types').NotifyOptionData)
         }, 300)
+      }
+    }
+    
+    // 如果是交通资源（汽车、轮船等），检查是否有酒店预订任务
+    if (data.resourceType === 'transport') {
+      const hotelTask = taskStore.pendingTasks.find(
+        t => t.scheduleId === data.scheduleId && t.skill === 'check_hotel'
+      )
+      if (hotelTask) {
+        const schedule = scheduleStore.getSchedule(data.scheduleId)
+        const destination = schedule?.meta?.to || schedule?.location || ''
+        
+        setTimeout(() => {
+          messageStore.addSystemMessage(`🏨 请问您希望住在${destination}的哪个商圈或地点？`)
+          
+          // 设置等待酒店地点模式
+          brain.setMode('WAIT_HOTEL_LOCATION')
+          brain.state.value.draft = { scheduleId: data.scheduleId }
+          brain.state.value.statusText = '等待输入酒店商圈...'
+          brain.setPendingTask(hotelTask)
+        }, 500)
       }
     }
   }
@@ -1054,6 +1149,30 @@ function handleSelectHotel(hotelId: string, _scheduleId: string, msgId: number) 
 }
 
 /**
+ * 取消航班选择
+ */
+function handleCancelFlight(_scheduleId: string, msgId: number) {
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data) {
+    messageStore.updateMessage(msgId, {
+      data: { ...(msg.data as import('./types').FlightListData), selected: null }
+    })
+  }
+}
+
+/**
+ * 取消酒店选择
+ */
+function handleCancelHotel(_scheduleId: string, msgId: number) {
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data) {
+    messageStore.updateMessage(msgId, {
+      data: { ...(msg.data as import('./types').HotelListData), selected: null }
+    })
+  }
+}
+
+/**
  * 确认酒店预订
  */
 function handleConfirmHotel(hotelId: string, scheduleId: string, msgId: number) {
@@ -1119,7 +1238,9 @@ async function handleSubmitTripApplication(data: import('./types').TripApplicati
     const transportMap: Record<string, import('./types').TransportMode> = {
       'flight': 'flight',
       'train': 'train',
-      'car': 'car'
+      'car': 'car',
+      'ship': 'ship',
+      'other': 'other'
     }
     // 同步更新日程的时间信息
     scheduleStore.updateSchedule(data.scheduleId, {
@@ -1154,6 +1275,7 @@ async function handleSubmitTripApplication(data: import('./types').TripApplicati
     if (updatedSchedule) {
       const flightResult = generateFlightList(updatedSchedule, data.from, data.to)
       if (flightResult.type === 'flight_list' && flightResult.data) {
+        messageStore.addSystemMessage(`✈️ 以下是根据您的行程（${data.from} → ${data.to}）为您推荐的航班，请选择：`)
         messageStore.addDataMessage('flight_list', '', {
           ...flightResult.data,
           scheduleId: data.scheduleId
@@ -1266,6 +1388,17 @@ async function handleConfirmSkillParams(
       scheduleId: data.scheduleId
     } as AttendeeTableData)
   } else if (result.type === 'resource_card' && result.data) {
+    // 资源卡片（如汽车、轮船等交通推荐）
+    const resourceData = result.data as ResourceCardData
+    // 如果是交通资源，添加提示语
+    if (resourceData.resourceType === 'transport') {
+      const schedule = scheduleStore.getSchedule(data.scheduleId)
+      const from = schedule?.meta?.from || ''
+      const to = schedule?.meta?.to || schedule?.location || ''
+      if (from && to) {
+        messageStore.addSystemMessage(`🚗 以下是根据您的行程（${from} → ${to}）为您推荐的交通方式，请确认：`)
+      }
+    }
     messageStore.addDataMessage('resource_card', '', {
       ...result.data,
       taskId: data.taskId,
@@ -1273,10 +1406,14 @@ async function handleConfirmSkillParams(
     } as ResourceCardData)
   } else if (result.type === 'flight_list' && result.data) {
     // 航班列表结果
+    const flightData = result.data as import('./types').FlightListData
+    messageStore.addSystemMessage(`✈️ 以下是根据您的行程（${flightData.from} → ${flightData.to}）为您推荐的航班，请选择：`)
     messageStore.addDataMessage('flight_list', '', {
       ...result.data,
       taskId: data.taskId,
-      scheduleId: data.scheduleId
+      scheduleId: data.scheduleId,
+      selected: null,
+      locked: false
     } as import('./types').FlightListData)
   } else if (result.type === 'action_notice') {
     messageStore.addSystemMessage(result.text || '')
@@ -1458,13 +1595,30 @@ function handleCreateMeetingSubmit(data: any) {
   
   // 重置数据
   createMeetingData.value = {}
+  
+  // 如果有参会人员，询问是否立即通知
+  if (data.attendees && data.attendees.length > 0) {
+    setTimeout(() => {
+      messageStore.addDataMessage('notify_option', '', {
+        scheduleId: newSchedule.id,
+        scheduleContent: data.title,
+        meetingTime: `${data.startTime} - ${data.endTime}`,
+        attendees: data.attendees,
+        selected: null,
+        confirmed: false
+      } as import('./types').NotifyOptionData)
+    }, 300)
+  }
 }
 
-// 处理出差申请提交
-function handleTripApplicationSubmit(data: import('./types').TripApplicationData) {
+// 处理出差申请提交（ReAct 模式 - AI 原生闭环）
+async function handleTripApplicationSubmit(data: import('./types').TripApplicationData) {
   console.log('[App] 出差申请提交:', data)
   
-  // 使用TripFormManager创建日程
+  // 关闭模态框
+  showTripApplication.value = false
+
+  // 1. 使用TripFormManager创建日程
   const schedule = TripFormManager.createScheduleFromForm({
     startDate: data.startDate,
     startTime: data.startTime,
@@ -1475,16 +1629,71 @@ function handleTripApplicationSubmit(data: import('./types').TripApplicationData
     transport: data.transport as import('./types').TransportMode,
     reason: data.reason
   }, data.scheduleId || `TRIP-${Date.now()}`)
-  
-  // 添加到日程存储
   scheduleStore.addSchedule(schedule)
-  
-  // 显示成功消息
-  messageStore.addSystemMessage(`✅ 出差申请提交成功：${data.from} → ${data.to}`)
-  
-  // 关闭模态框
-  showTripApplication.value = false
-  
+
+  // 2. 模拟审批流程
+  messageStore.addSystemMessage(`📋 出差申请已提交：${data.from} → ${data.to}，审批中...`)
+  await new Promise(r => setTimeout(r, 1000))
+
+  // 3. 同步日程 meta（审批通过）
+  const transportMap: Record<string, import('./types').TransportMode> = {
+    'flight': 'flight',
+    'train': 'train',
+    'car': 'car',
+    'ship': 'ship',
+    'other': 'other'
+  }
+  scheduleStore.updateSchedule(schedule.id, {
+    meta: {
+      ...(schedule.meta || {}),
+      tripApplied: true,
+      from: data.from,
+      to: data.to,
+      transport: transportMap[data.transport] || undefined
+    }
+  })
+  messageStore.addSystemMessage(`✅ 出差申请已通过!`)
+
+  // 4. 生成 TRIP 场景技能任务
+  const scenario = configStore.getScenario('TRIP')
+  if (scenario && scenario.skills.length > 0) {
+    const newTasks: Task[] = scenario.skills.map(skillCode => {
+      const skillMeta = configStore.getSkill(skillCode)
+      return {
+        id: crypto.randomUUID(),
+        scheduleId: schedule.id,
+        title: skillMeta?.name || skillCode,
+        desc: skillMeta?.description || '',
+        icon: skillMeta?.icon || 'fa-cube',
+        skill: skillCode,
+        actionBtn: '执行',
+        date: data.startDate,
+        status: 'pending' as const
+      }
+    })
+    taskStore.addTasks(newTasks)
+
+    // apply_trip 任务直接标记为已完成（表单已提交 = 申请已完成）
+    const applyTripTask = newTasks.find(t => t.skill === 'apply_trip')
+    if (applyTripTask) {
+      taskStore.completeTask(applyTripTask.id)
+    }
+
+    // 5. 触发统一自动执行确认（AI 原生闭环）
+    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport']
+    const autoTasks = newTasks.filter(task => AUTO_EXECUTABLE_SKILLS.includes(task.skill))
+    if (autoTasks.length > 0) {
+      brain.setMode('WAIT_AUTO_EXEC_CONFIRM')
+      brain.setDraft({
+        scheduleId: schedule.id,
+        autoExecTaskIds: autoTasks.map(t => t.id)
+      })
+      messageStore.addSystemMessage(
+        '已生成交通安排任务,需要我现在自动帮你跑一遍推荐吗?(回复"是"或"否")'
+      )
+    }
+  }
+
   // 重置表单数据
   currentTripFormData.value = {
     scheduleId: '',
@@ -1617,8 +1826,10 @@ onUnmounted(() => {
       @select-transport="handleSelectTransport"
       @select-flight="handleSelectFlight"
       @confirm-flight="handleConfirmFlight"
+      @cancel-flight="handleCancelFlight"
       @select-hotel="handleSelectHotel"
       @confirm-hotel="handleConfirmHotel"
+      @cancel-hotel="handleCancelHotel"
       @submit-trip-application="handleSubmitTripApplication"
       @select-notify-option="handleSelectNotifyOption"
       @skip-notify="handleSkipNotify"

@@ -157,8 +157,10 @@ const emit = defineEmits<{
 
 const transportOptions = [
   { value: 'flight', label: '飞机', icon: 'fa-solid fa-plane' },
-  { value: 'train', label: '高铁', icon: 'fa-solid fa-train' },
-  { value: 'car', label: '汽车', icon: 'fa-solid fa-car' }
+  { value: 'train', label: '火车', icon: 'fa-solid fa-train' },
+  { value: 'car', label: '汽车', icon: 'fa-solid fa-car' },
+  { value: 'ship', label: '轮船', icon: 'fa-solid fa-ship' },
+  { value: 'other', label: '其他', icon: 'fa-solid fa-ellipsis' }
 ]
 
 const form = ref({

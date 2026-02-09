@@ -41,8 +41,10 @@ const emit = defineEmits<{
   selectTransport: [option: TransportOption, msgId: number, data: TransportSelectorData]
   selectFlight: [flightNo: string, scheduleId: string, msgId: number]
   confirmFlight: [flightNo: string, scheduleId: string, msgId: number]
+  cancelFlight: [scheduleId: string, msgId: number]
   selectHotel: [hotelId: string, scheduleId: string, msgId: number]
   confirmHotel: [hotelId: string, scheduleId: string, msgId: number]
+  cancelHotel: [scheduleId: string, msgId: number]
   submitTripApplication: [data: TripApplicationData, msgId: number]
   selectNotifyOption: [option: 'now' | 'before_1h', scheduleId: string, msgId: number]
   skipNotify: [scheduleId: string, msgId: number]
@@ -240,6 +242,7 @@ defineExpose({
             :data="msg.data"
             @selectFlight="emit('selectFlight', $event, msg.data.scheduleId, msg.id)"
             @confirmFlight="emit('confirmFlight', $event, msg.data.scheduleId, msg.id)"
+            @cancelFlight="emit('cancelFlight', msg.data.scheduleId, msg.id)"
           />
 
           <!-- Hotel List -->
@@ -248,6 +251,7 @@ defineExpose({
             :data="msg.data"
             @selectHotel="emit('selectHotel', $event, msg.data.scheduleId, msg.id)"
             @confirmHotel="emit('confirmHotel', $event, msg.data.scheduleId, msg.id)"
+            @cancelHotel="emit('cancelHotel', msg.data.scheduleId, msg.id)"
           />
 
           <!-- Trip Application -->

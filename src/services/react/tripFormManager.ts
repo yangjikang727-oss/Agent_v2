@@ -163,10 +163,10 @@ export class TripFormManager {
   ): string {
     const transportMap: Record<TransportMode, string> = {
       flight: '✈️ 飞机',
-      train: '🚄 高铁',
+      train: '🚄 火车',
       car: '🚗 汽车',
-      ship: '🚢 轮船',
-      other: '🚌 其他'
+      ship: '⛵ 轮船',
+      other: '🛤️ 其他'
     }
     
     const transportText = fields.transport ? transportMap[fields.transport] : '未指定'

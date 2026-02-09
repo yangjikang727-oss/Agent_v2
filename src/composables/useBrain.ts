@@ -61,6 +61,8 @@ export function useBrain() {
         return ['国贸附近', '中关村', '陆家嘴', '天府广场']
       case 'CONFIRM_CONFLICT':
         return ['确认继续', '取消']
+      case 'WAIT_AUTO_EXEC_CONFIRM':
+        return ['是', '好', '不用自动执行']
       default:
         return []
     }

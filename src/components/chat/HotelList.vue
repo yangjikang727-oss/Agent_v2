@@ -71,6 +71,13 @@
         <i class="fa-solid fa-check mr-1"></i>
         确认预订
       </button>
+      <button
+        v-if="data.selected"
+        @click="cancelSelection"
+        class="px-4 py-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg text-sm transition-colors"
+      >
+        取消
+      </button>
     </div>
     
     <div v-else class="mt-3 text-center text-sm text-green-600">
@@ -90,6 +97,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   selectHotel: [hotelId: string, scheduleId: string]
   confirmHotel: [hotelId: string, scheduleId: string]
+  cancelHotel: [scheduleId: string]
 }>()
 
 function selectHotel(hotelId: string) {
@@ -100,6 +108,10 @@ function selectHotel(hotelId: string) {
 function confirmSelection() {
   if (!props.data.selected) return
   emit('confirmHotel', props.data.selected, props.data.scheduleId)
+}
+
+function cancelSelection() {
+  emit('cancelHotel', props.data.scheduleId)
 }
 
 function getTagClass(tag: string): string {

@@ -13,11 +13,14 @@ export const useMessageStore = defineStore('message', () => {
     }
   ])
 
+  // 自增计数器，避免 Date.now() 在同毫秒内产生重复 ID
+  let nextId = 1
+
   // 添加消息
   function addMessage(message: Omit<Message, 'id'>) {
     messages.value.push({
       ...message,
-      id: Date.now()
+      id: nextId++
     })
   }
 

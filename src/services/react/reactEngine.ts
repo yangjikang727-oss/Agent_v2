@@ -268,10 +268,18 @@ export class ReActEngine {
    */
   private buildFormData(skillName: string, params: Record<string, any>): Record<string, any> {
     if (skillName === 'book_meeting_room') {
+      // datetime-local 输入框需要 YYYY-MM-DDTHH:mm 格式
+      const date = params.date || new Date().toISOString().split('T')[0]
+      const startTimeRaw = params.startTime || ''
+      const endTimeRaw = params.endTime || ''
+      // 拼接日期+时间
+      const startDateTime = startTimeRaw ? `${date}T${startTimeRaw}` : ''
+      const endDateTime = endTimeRaw ? `${date}T${endTimeRaw}` : ''
+
       return {
         title: params.title || '',
-        startTime: params.startTime || '',
-        endTime: params.endTime || '',
+        startTime: startDateTime,
+        endTime: endDateTime,
         location: params.location || '',
         roomType: params.roomType || '',
         attendees: params.attendees || [],

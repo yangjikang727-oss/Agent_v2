@@ -5,6 +5,7 @@
 
 import { LLMParamExtractor } from './llmParamExtractor'
 import type { LLMConfig } from '../core/llmCore'
+import { extractDate, extractTime, extractTransport, extractAttendees } from '../../utils/nlpUtils'
 
 interface CollectionState {
   params: Record<string, any>
@@ -77,33 +78,77 @@ export class SmartParamCollector {
       console.log(`[SmartParamCollector] 历史提取补充:`, historyExtraction.params)
     }
     
-    // 4. 确保基本参数（兜底处理）
+    // 4. 规则兜底：结合正则/NLP 工具进一步补充参数
+    const fullText = state.history.join('\n')
+
+    // 4.1 日期兜底
     if (!state.params.startDate) {
-      state.params.startDate = new Date().toISOString().split('T')[0]
+      const d = extractDate(fullText)
+      if (d) {
+        state.params.startDate = d
+      } else {
+        state.params.startDate = new Date().toISOString().split('T')[0]
+      }
     }
-    
     if (!state.params.endDate) {
-      // 默认出差一天
-      const nextDay = new Date()
+      const nextDay = new Date(state.params.startDate || new Date().toISOString().split('T')[0])
       nextDay.setDate(nextDay.getDate() + 1)
       state.params.endDate = nextDay.toISOString().split('T')[0]
     }
-    
-    // 5. 计算结束时间
+
+    // 4.2 时间兜底
+    if (!state.params.startTime) {
+      const t = extractTime(fullText)
+      if (t) {
+        state.params.startTime = t
+      }
+    }
     if (state.params.startTime && !state.params.endTime) {
       // 默认出差8小时
-      const timeParts = state.params.startTime.split(':')
+      const startTimeStr = String(state.params.startTime)
+      const timeParts = startTimeStr.split(':')
       if (timeParts.length === 2) {
-        const hours = parseInt(timeParts[0])
-        const minutes = parseInt(timeParts[1])
+        const hours = parseInt(timeParts[0] || '0')
+        const minutes = parseInt(timeParts[1] || '0')
         const totalMinutes = hours * 60 + minutes + (8 * 60)
         const endHours = Math.floor(totalMinutes / 60) % 24
         const endMinutes = totalMinutes % 60
         state.params.endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`
       }
     }
+
+    // 4.3 出行方式兜底
+    if (!state.params.transport) {
+      const transport = extractTransport(fullText)
+      if (transport) {
+        state.params.transport = transport
+      }
+    }
+
+    // 4.4 理由兜底：使用最近的一句用户输入
+    if (!state.params.reason || String(state.params.reason).trim() === '') {
+      state.params.reason = query.trim()
+    }
+
+    // 4.5 出发地/目的地粗略提取（从X到Y / 去Y出差）
+    if (!state.params.from || !state.params.to) {
+      const routeMatch = fullText.match(/从([^到去\s,，。]+)[到至去]([^出差工作出行开会\s,，。]+)/)
+      if (routeMatch) {
+        const from = routeMatch[1]?.trim()
+        const to = routeMatch[2]?.trim()
+        if (from && !state.params.from) state.params.from = from
+        if (to && !state.params.to) state.params.to = to
+      } else {
+        // 只有目的地：去上海出差
+        const toMatch = fullText.match(/去([^出差工作出行开会\s,，。]+)(出差|工作|出行)?/)
+        if (toMatch) {
+          const to = toMatch[1]?.trim()
+          if (to && !state.params.to) state.params.to = to
+        }
+      }
+    }
     
-    // 6. 确定缺失的参数
+    // 5. 确定缺失的参数
     const requiredParams = ['from', 'to', 'startDate', 'startTime', 'endDate', 'endTime', 'transport', 'reason']
     const missing: string[] = []
     
@@ -117,7 +162,7 @@ export class SmartParamCollector {
     
     const canExecute = missing.length === 0
     
-    // 7. 生成下一个问题（避免重复询问）
+    // 6. 生成下一个问题（避免重复询问）
     let nextQuestion: string | undefined
     if (!canExecute && missing.length > 0) {
       // 按优先级排序的问题顺序
@@ -205,18 +250,51 @@ export class SmartParamCollector {
       console.log(`[SmartParamCollector] 历史提取补充:`, historyExtraction.params)
     }
     
-    // 4. 确保基本参数（兜底处理）
+    // 4. 规则兜底：结合正则/NLP 工具进一步补充参数
+    const fullText = state.history.join('\n')
+
+    // 4.1 日期兜底
     if (!state.params.date) {
-      state.params.date = new Date().toISOString().split('T')[0]
+      const d = extractDate(fullText)
+      if (d) {
+        state.params.date = d
+      } else {
+        state.params.date = new Date().toISOString().split('T')[0]
+      }
     }
-    
+
+    // 4.2 时间兜底
+    if (!state.params.startTime) {
+      const t = extractTime(fullText)
+      if (t) {
+        state.params.startTime = t
+      }
+    }
+
+    // 4.3 时长兜底
+    if (!state.params.duration) {
+      const durationMatch = fullText.match(/(\d+(?:\.\d+)?)\s*(?:小时|个小时|h|hour)/i)
+      if (durationMatch) {
+        state.params.duration = parseFloat(durationMatch[1] || '1')
+      }
+    }
+
+    // 4.4 标题兜底
+    if (!state.params.title) {
+      const titleMatch = fullText.match(/(?:部门|项目|团队|周|月|日|每日|每周|季度|年度)?(?:例会|会议|讨论会?|复盘|沟通会?|碰头会?|站会|晨会|评审|汇报|分享会?|培训)/)
+      if (titleMatch) {
+        state.params.title = titleMatch[0]
+      }
+    }
+
     // 5. 计算结束时间
     if (state.params.startTime && state.params.duration && !state.params.endTime) {
-      const timeParts = state.params.startTime.split(':')
+      const startTimeStr = String(state.params.startTime)
+      const timeParts = startTimeStr.split(':')
       if (timeParts.length === 2) {
-        const hours = parseInt(timeParts[0])
-        const minutes = parseInt(timeParts[1])
-        const totalMinutes = hours * 60 + minutes + (state.params.duration * 60)
+        const hours = parseInt(timeParts[0] || '0')
+        const minutes = parseInt(timeParts[1] || '0')
+        const totalMinutes = hours * 60 + minutes + Math.round(state.params.duration * 60)
         const endHours = Math.floor(totalMinutes / 60) % 24
         const endMinutes = totalMinutes % 60
         state.params.endTime = `${endHours.toString().padStart(2, '0')}:${endMinutes.toString().padStart(2, '0')}`
