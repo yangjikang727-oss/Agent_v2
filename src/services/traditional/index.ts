@@ -6,4 +6,4 @@
 export { parseIntent, generateAgenda } from './intentParser'
 
 // 重导出技能注册表（传统模式专用）
-export * from '../skillRegistry'
+export * from './skillRegistry'

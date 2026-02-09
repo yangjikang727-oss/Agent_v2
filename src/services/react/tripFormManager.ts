@@ -71,7 +71,7 @@ export class TripFormManager {
    */
   static generateTaskForm(
     fields: TripFormFields,
-    scheduleId: string
+    _scheduleId: string
   ): {
     formTitle: string
     formFields: Array<{
@@ -132,19 +132,11 @@ export class TripFormManager {
     fields: TripFormFields,
     scheduleId?: string
   ): Schedule {
-    // 组合完整的开始时间和结束时间
-    const startDateTime = fields.startDate && fields.startTime 
-      ? `${fields.startDate}T${fields.startTime}` 
-      : new Date().toISOString()
-    
-    const endDateTime = fields.endDate && fields.endTime 
-      ? `${fields.endDate}T${fields.endTime}` 
-      : new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString()
 
     return {
       id: scheduleId || `TRIP-${Date.now()}`,
       content: `出差: ${fields.from || '未指定'} → ${fields.to || '未指定'}`,
-      date: fields.startDate || new Date().toISOString().split('T')[0],
+      date: (fields.startDate || new Date().toISOString().split('T')[0]) as string,
       startTime: fields.startTime || '09:00',
       endTime: fields.endTime || '18:00',
       endDate: fields.endDate,
@@ -167,7 +159,7 @@ export class TripFormManager {
    */
   static generateNotificationPrompt(
     fields: TripFormFields,
-    schedule: Schedule
+    _schedule: Schedule
   ): string {
     const transportMap: Record<TransportMode, string> = {
       flight: '✈️ 飞机',

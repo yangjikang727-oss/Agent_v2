@@ -23,7 +23,7 @@ export function useTimeline(containerRef: Ref<HTMLElement | null>) {
       if (time === 'now') {
         targetTop = Math.max(0, currentTimeTop.value - 150)
       } else {
-        const hour = parseInt(time.split(':')[0])
+        const hour = parseInt(time.split(':')[0] ?? '0')
         targetTop = (hour - 7) * 80 - 50
       }
 

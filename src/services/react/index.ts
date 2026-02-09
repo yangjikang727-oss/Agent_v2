@@ -65,25 +65,19 @@ export {
   createApiProvider
 } from './providers'
 
-// ==================== Skill 机制 ====================
+// ==================== Skill 机制（Qoder Skill 风格） ====================
 
-// 导出 Skill 模块
-export * from './skill'
-
-// 主要类型再导出（便于使用）
-export type {
-  SkillSpec,
-  SkillContext,
-  SelectorDecision,
-  SkillExecutionResult,
-  DisclosureLevel
-} from './skill'
+// 导出新版 Skill 模块
+export { skillStore } from './skills/skillStore'
+export type { SkillMatchResult } from './skills/skillStore'
+export type { SkillMetadata, SkillInstruction, ParsedSkill } from './skills/skillLoader'
+export { parseSkillMd, loadAllSkillFiles } from './skills/skillLoader'
 
 // ==================== ReAct 模式初始化 ====================
 
 import { createReActEngine } from './reactEngine'
 import type { LLMConfig } from '../core/llmCore'
-import { initSkillSystem } from './skill'
+import { skillStore } from './skills/skillStore'
 
 /**
  * 初始化 ReAct 模式
@@ -91,13 +85,13 @@ import { initSkillSystem } from './skill'
  * @returns ReAct引擎实例
  */
 export function initializeReAct(config: LLMConfig) {
-  // 初始化 Skill 系统
-  initSkillSystem({ llmConfig: config, registerExamples: true })
+  // 初始化 Skill 系统（加载所有 SKILL.md）
+  skillStore.loadAllSkills()
   
   // 创建 ReAct 引擎
   const engine = createReActEngine(config)
   
-  console.log('[ReAct] 初始化完成（含 Skill 系统）')
+  console.log('[ReAct] 初始化完成（Skill 系统已加载）')
   return engine
 }
 

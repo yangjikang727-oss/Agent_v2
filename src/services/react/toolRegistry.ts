@@ -9,7 +9,6 @@
  */
 
 import type { ToolProvider, ToolAdapter } from './toolAdapter'
-import { bookMeetingRoomTool, applyBusinessTripTool } from './skill/skillToolAdapter'
 
 // ==================== 工具类型定义 ====================
 
@@ -270,6 +269,78 @@ export class ToolRegistry {
 // ==================== 全局工具注册表实例 ====================
 
 export const toolRegistry = new ToolRegistry()
+
+// ==================== Skill 工具定义（原 skillToolAdapter.ts，已内联） ====================
+
+/** 会议预定工具 */
+const bookMeetingRoomTool: Tool = {
+  name: 'book_meeting_room',
+  description: '预定会议室，创建会议日程',
+  parameters: [
+    { name: 'title', type: 'string', description: '会议主题', required: true },
+    { name: 'date', type: 'string', description: '会议日期', required: true },
+    { name: 'startTime', type: 'string', description: '开始时间', required: true },
+    { name: 'endTime', type: 'string', description: '结束时间', required: false },
+    { name: 'attendees', type: 'array', description: '参会人员列表', required: true },
+    { name: 'location', type: 'string', description: '会议地点/会议室', required: false }
+  ],
+  category: 'schedule',
+  async execute(params: Record<string, any>, _context: ToolContext): Promise<ToolResult> {
+    try {
+      console.log('[BookMeetingRoomTool] 执行会议预定:', params)
+      const meetingId = `MTG-${Date.now()}`
+      return {
+        success: true,
+        data: {
+          meetingId,
+          title: params.title,
+          date: params.date,
+          time: `${params.startTime} - ${params.endTime || '待定'}`,
+          location: params.location || '待分配',
+          attendees: params.attendees,
+          message: `会议「${params.title}」已创建成功，会议ID: ${meetingId}`
+        }
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '未知错误' }
+    }
+  }
+}
+
+/** 出差申请工具 */
+const applyBusinessTripTool: Tool = {
+  name: 'apply_business_trip',
+  description: '申请出差，包括交通和住宿安排',
+  parameters: [
+    { name: 'destination', type: 'string', description: '出差目的地', required: true },
+    { name: 'departure', type: 'string', description: '出发城市', required: true },
+    { name: 'startDate', type: 'string', description: '出发日期', required: true },
+    { name: 'endDate', type: 'string', description: '返回日期', required: false },
+    { name: 'reason', type: 'string', description: '出差事由', required: true }
+  ],
+  category: 'schedule',
+  async execute(params: Record<string, any>, _context: ToolContext): Promise<ToolResult> {
+    try {
+      console.log('[ApplyBusinessTripTool] 执行出差申请:', params)
+      const tripId = `TRIP-${Date.now()}`
+      return {
+        success: true,
+        data: {
+          tripId,
+          destination: params.destination,
+          departure: params.departure,
+          startDate: params.startDate,
+          endDate: params.endDate || params.startDate,
+          reason: params.reason,
+          status: '已提交审批',
+          message: `出差申请已提交，申请ID: ${tripId}`
+        }
+      }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : '未知错误' }
+    }
+  }
+}
 
 // 注册 Skill 工具
 console.log('[ToolRegistry] 注册 Skill 工具...')

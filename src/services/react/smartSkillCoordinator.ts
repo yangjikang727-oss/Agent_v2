@@ -201,7 +201,7 @@ export class SmartSkillCoordinator {
    */
   private async invokeSkill(
     skillCode: string,
-    params: Record<string, any>
+    _params: Record<string, any>
   ): Promise<{ success: boolean; message: string }> {
     // 这里应该集成实际的技能执行逻辑
     // 暂时返回模拟结果

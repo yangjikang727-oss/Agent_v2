@@ -9,7 +9,7 @@ import type {
   AttendeeRow,
   TransportMode,
   ParamConfirmData
-} from '../types'
+} from '../../types'
 
 // 模拟通讯录数据
 export const MOCK_DIRECTORY: DirectoryUser[] = [
@@ -219,13 +219,13 @@ export function generateFlightList(
   schedule: Schedule,
   from: string,
   to: string
-): import('../types/skill').SkillResult {
+): import('../../types/skill').SkillResult {
   const startTimeStr = schedule.startTime || '09:00'
   const timeParts = startTimeStr.split(':')
   const baseHour = timeParts[0] ? parseInt(timeParts[0]) : 9
   
   // 根据出发地和目的地生成航班
-  const flights: import('../types/message').FlightOption[] = [
+  const flights: import('../../types/message').FlightOption[] = [
     {
       flightNo: 'CA1502',
       airline: '国航',
@@ -299,7 +299,7 @@ export function generateFlightList(
       flights,
       selected: null,
       locked: false
-    } as import('../types/message').FlightListData
+    } as import('../../types/message').FlightListData
   }
 }
 
@@ -309,9 +309,9 @@ export function generateFlightList(
 export function generateHotelList(
   schedule: Schedule,
   location: string
-): import('../types/skill').SkillResult {
+): import('../../types/skill').SkillResult {
   // 根据地点生成酒店推荐
-  const hotels: import('../types/message').HotelOption[] = [
+  const hotels: import('../../types/message').HotelOption[] = [
     {
       hotelId: 'h001',
       name: '全季酒店',
@@ -391,7 +391,7 @@ export function generateHotelList(
       hotels,
       selected: null,
       locked: false
-    } as import('../types/message').HotelListData
+    } as import('../../types/message').HotelListData
   }
 }
 
@@ -548,7 +548,7 @@ const skillHandlers: Record<string, SkillHandler> = {
         transport: transport,
         reason: schedule.content || '',
         status: 'draft'
-      } as import('../types/message').TripApplicationData
+      } as import('../../types/message').TripApplicationData
     }
   },
 

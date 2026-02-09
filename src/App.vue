@@ -10,14 +10,15 @@ import type {
   Resource,
   ParamConfirmData,
   ScheduleListData,
-  IntentData
+  IntentData,
+  TransportMode
 } from './types'
 
 // Stores
 import { useScheduleStore, useTaskStore, useMessageStore, useConfigStore } from './stores'
 
 // Services
-import { executeSkill, generateTransportCard, applyConfirmedParams } from './services/skillRegistry'
+import { executeSkill, generateTransportCard, applyConfirmedParams } from './services/traditional/skillRegistry'
 import { parseIntent, generateAgenda, processWithReAct, initializeReAct } from './services/llmService'
 import { contextManager } from './services/context'
 import { startNotificationService, stopNotificationService } from './services/notificationService'
@@ -123,7 +124,7 @@ async function createSchedule(ctx: {
     attendees: ctx.attendees || [],
     agenda: '',
     meta: { 
-      transport: ctx.transport as Schedule['meta']['transport'],
+      transport: ctx.transport as import('./types').TransportMode | undefined,
       from: ctx.from,
       to: ctx.to
     }
@@ -1126,7 +1127,7 @@ async function handleSubmitTripApplication(data: import('./types').TripApplicati
   
   if (data.transport === 'flight' && data.from && data.to) {
     // 生成航班列表
-    const { generateFlightList } = await import('./services/skillRegistry')
+    const { generateFlightList } = await import('./services/traditional/skillRegistry')
     const updatedSchedule = scheduleStore.getSchedule(data.scheduleId)
     if (updatedSchedule) {
       const flightResult = generateFlightList(updatedSchedule, data.from, data.to)

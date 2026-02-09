@@ -35,6 +35,30 @@ Final Answer: [简洁地询问一个问题]
 用户请求：${userQuery}`,
 
   /**
+   * Skill 参数提取提示词（第二层披露）
+   * 将匹配到的 Skill 指令 + 用户输入发给 LLM，提取结构化参数
+   */
+  SKILL_EXTRACT: (skillInstructions: string, currentDate: string, userQuery: string) => `你是一个参数提取引擎。根据以下技能指令中的参数说明，从用户输入中提取所有能识别的参数。
+
+当前日期：${currentDate}
+
+## 技能指令
+${skillInstructions}
+
+## 用户输入
+"${userQuery}"
+
+## 输出要求
+返回 JSON 格式（不要添加任何其他内容）：
+{"params": {"参数名": "提取的值", ...}, "confidence": 0.0-1.0, "reasoning": "提取逻辑"}
+
+注意：
+- 只提取能从用户输入中确认的参数，不要编造
+- 时间格式转为 HH:mm（如 "下午3点" → "15:00"）
+- 日期相对词转为具体日期（如 "明天" → 基于当前日期计算）
+- 参会人/人员转为数组格式`,
+
+  /**
    * 观察阶段提示词
    */
   OBSERVE: (observation: string, _toolsSummary: string) => `工具执行结果：
