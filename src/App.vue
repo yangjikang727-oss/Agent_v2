@@ -27,6 +27,7 @@ import { startNotificationService, stopNotificationService } from './services/no
 // Utils
 import { extractDate, extractTime, extractAttendees, extractTransport, detectScenarioType } from './utils/nlpUtils'
 import { getEndTime } from './utils/dateUtils'
+import { logger } from './utils/logger'
 
 // Composables
 import { useBrain } from './composables/useBrain'
@@ -40,6 +41,7 @@ import TaskStack from './components/dashboard/TaskStack.vue'
 import DetailModal from './components/modals/DetailModal.vue'
 import ConfigModal from './components/modals/ConfigModal.vue'
 import CreateMeetingModal from './components/modals/CreateMeetingModal.vue'
+import LogViewerModal from './components/modals/LogViewerModal.vue'
 import TripApplication from './components/chat/TripApplication.vue'
 import { TripFormManager } from './services/react/tripFormManager'
 
@@ -58,6 +60,7 @@ const timelineRef = ref<InstanceType<typeof TimelinePanel> | null>(null)
 const showDetailModal = ref(false)
 const selectedEvent = ref<Schedule | null>(null)
 const showConfigModal = ref(false)
+const showLogViewer = ref(false)
 const showCreateMeetingModal = ref(false)
 const createMeetingData = ref<Record<string, any>>({})
 const showTripApplication = ref(false)  // 出差申请表单显示控制
@@ -245,7 +248,10 @@ async function processInputWithReAct(text: string) {
   const sessionId = 'session_default'
   const userId = 'user1'
   
-  console.log('[App] 开始ReAct处理:', text)
+  logger.info('App/ReAct', '========== 开始 ReAct 处理 ==========')
+  logger.info('App/ReAct', `用户输入: ${text}`)
+  logger.info('App/ReAct', `SessionID: ${sessionId}, UserID: ${userId}`)
+  
   brain.startThinking('ReAct推理中...')
   brain.startReAct(3)
   
@@ -262,9 +268,9 @@ async function processInputWithReAct(text: string) {
     // 4. 获取对话历史
     // const historyContext = contextManager.getFormattedHistory(sessionId)
     
-    console.log('[App] 当前配置:', {
+    console.log('[App/ReAct] LLM配置:', {
       provider: configStore.llmProvider,
-      hasApiKey: !!configStore.llmApiKey,
+      hasApiKey: !!configStore.llmApiKey ? '✓' : '✗',
       apiUrl: configStore.llmApiUrl,
       model: configStore.llmModel,
       historyLength: session.history.length
@@ -281,6 +287,7 @@ async function processInputWithReAct(text: string) {
     }
     
     // 6. 调用ReAct引擎处理（传递对话历史）
+    console.log('[App/ReAct] 调用 processWithReAct 引擎...')
     const result = await processWithReAct(
       text,
       {
@@ -309,6 +316,10 @@ async function processInputWithReAct(text: string) {
     })
     
     if (result.success) {
+      console.log('[App/ReAct] ✓ 引擎执行成功')
+      console.log('[App/ReAct] 最终回答:', result.finalAnswer)
+      console.log('[App/ReAct] 推理步骤数:', result.steps.length)
+      
       brain.finishReAct(result.finalAnswer)
       
       // 8. 记录助手回复
@@ -320,7 +331,7 @@ async function processInputWithReAct(text: string) {
       // 检查是否有创建会议或出差申请的动作
       let hasModalAction = false
       if (result.steps.length > 0) {
-        console.log('[ReAct] 推理步骤:', result.steps)
+        console.log('[App/ReAct] 推理步骤详情:', result.steps)
         
         const createMeetingStep = result.steps.find(step => 
           step.action === 'open_create_meeting_modal'
@@ -331,10 +342,14 @@ async function processInputWithReAct(text: string) {
         )
         
         if (createMeetingStep && createMeetingStep.actionInput) {
+          console.log('[App/ReAct] → 触发会议创建表单')
+          console.log('[App/ReAct] 表单数据:', createMeetingStep.actionInput.formData)
           createMeetingData.value = createMeetingStep.actionInput.formData || {}
           showCreateMeetingModal.value = true
           hasModalAction = true
         } else if (createTripStep && createTripStep.actionInput) {
+          console.log('[App/ReAct] → 触发出差申请表单')
+          console.log('[App/ReAct] 表单数据:', createTripStep.actionInput.formData)
           currentTripFormData.value = {
             ...createTripStep.actionInput.formData,
             id: createTripStep.actionInput.taskId || `TRIP-${Date.now()}`,
@@ -347,9 +362,13 @@ async function processInputWithReAct(text: string) {
       
       // 只有非弹窗场景且 finalAnswer 有内容时才添加消息
       if (!hasModalAction && result.finalAnswer && result.finalAnswer.trim()) {
+        console.log('[App/ReAct] → 添加系统消息')
         messageStore.addSystemMessage(result.finalAnswer)
+      } else if (!hasModalAction) {
+        console.log('[App/ReAct] ⚠ 未添加消息 (finalAnswer为空或仅空格)')
       }
     } else {
+      console.error('[App/ReAct] ✗ 引擎执行失败:', result.error)
       brain.resetReAct()
       const errorMsg = `处理失败: ${result.error || '未知错误'}`
       messageStore.addSystemMessage(errorMsg)
@@ -357,11 +376,13 @@ async function processInputWithReAct(text: string) {
     }
   } catch (error) {
     brain.resetReAct()
-    console.error('[ReAct] 处理错误:', error)
+    console.error('[App/ReAct] ✗✗ 异常捕获:', error)
+    console.error('[App/ReAct] 错误堆栈:', (error as Error).stack)
     const errorMsg = `ReAct模式处理出错: ${(error as Error).message}`
     messageStore.addSystemMessage(errorMsg)
     contextManager.addMessage(sessionId, 'assistant', errorMsg)
   } finally {
+    console.log('[App/ReAct] ========== ReAct 处理结束 ==========')
     brain.stopThinking()
   }
 }
@@ -771,6 +792,10 @@ function parseIntentByRegex(text: string, currentDate: string): IntentData | nul
 // ==================== 事件处理 ====================
 
 function handleSend(text: string) {
+  logger.info('App', '=========================================')
+  logger.info('App', `📨 接收用户消息: ${text}`)
+  logger.info('App', `当前模式: ${brain.state.value.mode}, 是否ReAct: ${useReActMode.value}`)
+  
   messageStore.addUserMessage(text)
   
   // 优先处理特殊模式（与 ReAct/传统模式无关）
@@ -785,14 +810,17 @@ function handleSend(text: string) {
     'CONFIRM_CONFLICT'
   ]
   if (specialModes.includes(brain.state.value.mode)) {
+    logger.info('App', '→ 特殊模式，调用传统 processInput')
     processInput(text)
     return
   }
   
   // 根据模式选择处理方式
   if (useReActMode.value) {
+    logger.info('App', '→ 调用 ReAct 模式处理')
     processInputWithReAct(text)
   } else {
+    logger.info('App', '→ 调用传统模式处理')
     processInput(text)
   }
 }
@@ -809,15 +837,20 @@ function handleReset() {
 }
 
 async function handleExecuteTask(task: Task) {
+  console.log('[App/Task] ========== 执行任务 ==========')
+  console.log('[App/Task] 任务信息:', { id: task.id, skill: task.skill, title: task.title, scheduleId: task.scheduleId })
+  
   currentActionType.value = `Running: ${task.title}`
   showProcessing.value = true
   await new Promise(r => setTimeout(r, 800))
 
   const schedule = scheduleStore.getSchedule(task.scheduleId)
   if (!schedule) {
+    console.error('[App/Task] ✗ 日程不存在:', task.scheduleId)
     showProcessing.value = false
     return
   }
+  console.log('[App/Task] ✓ 已找到对应日程:', schedule.content)
 
   const result = await executeSkill(task.skill, schedule)
   showProcessing.value = false
@@ -920,10 +953,16 @@ function handleSkipTask(task: Task) {
 }
 
 function handleConfirmResource(data: ResourceCardData, msgId: number) {
+  console.log('[App/Resource] ========== 确认资源卡片 ==========')
+  console.log('[App/Resource] 资源数据:', data)
+  console.log('[App/Resource] 消息ID:', msgId)
+  
   if (data.taskId) {
+    console.log('[App/Resource] → 完成任务:', data.taskId)
     taskStore.completeTask(data.taskId)
   }
   if (data.scheduleId) {
+    console.log('[App/Resource] → 添加资源到日程:', data.scheduleId)
     const resource: Resource = {
       id: crypto.randomUUID(),
       name: data.title,
@@ -931,6 +970,7 @@ function handleConfirmResource(data: ResourceCardData, msgId: number) {
       resourceType: data.resourceType
     }
     scheduleStore.addResource(data.scheduleId, resource)
+    console.log('[App/Resource] ✓ 资源已添加:', resource)
     
     // 如果是会议室预订，自动询问是否通知参会人
     if (data.resourceType === 'room') {
@@ -952,14 +992,17 @@ function handleConfirmResource(data: ResourceCardData, msgId: number) {
     
     // 如果是交通资源（汽车、轮船等），检查是否有酒店预订任务
     if (data.resourceType === 'transport') {
+      console.log('[App/Resource] → 检测到交通资源，查找酒店预订任务...')
       const hotelTask = taskStore.pendingTasks.find(
         t => t.scheduleId === data.scheduleId && t.skill === 'check_hotel'
       )
       if (hotelTask) {
+        console.log('[App/Resource] ✓ 找到酒店任务，准备询问商圈')
         const schedule = scheduleStore.getSchedule(data.scheduleId)
         const destination = schedule?.meta?.to || schedule?.location || ''
         
         setTimeout(() => {
+          console.log('[App/Resource] → 弹出酒店商圈询问')
           messageStore.addSystemMessage(`🏨 请问您希望住在${destination}的哪个商圈或地点？`)
           
           // 设置等待酒店地点模式
@@ -968,10 +1011,14 @@ function handleConfirmResource(data: ResourceCardData, msgId: number) {
           brain.state.value.statusText = '等待输入酒店商圈...'
           brain.setPendingTask(hotelTask)
         }, 500)
+      } else {
+        console.log('[App/Resource] ⚠ 未找到酒店预订任务')
       }
     }
   }
   messageStore.updateMessage(msgId, { type: 'text', content: '✅ 已确认预订' })
+  console.log('[App/Resource] ✓ 消息已更新')
+  console.log('[App/Resource] ========== 资源确认完成 ==========')
 }
 
 /**
@@ -1078,12 +1125,22 @@ function handleSelectFlight(flightNo: string, _scheduleId: string, msgId: number
  * 确认航班预订
  */
 function handleConfirmFlight(flightNo: string, scheduleId: string, msgId: number) {
+  console.log('[App/Flight] ========== 确认航班选择 ==========')
+  console.log('[App/Flight] 航班号:', flightNo, '日程ID:', scheduleId, '消息ID:', msgId)
+  
   const msg = messageStore.getMessage(msgId)
-  if (!msg || !msg.data) return
+  if (!msg || !msg.data) {
+    console.error('[App/Flight] ✗ 消息不存在或无数据')
+    return
+  }
   
   const flightData = msg.data as import('./types').FlightListData
   const selectedFlight = flightData.flights.find(f => f.flightNo === flightNo)
-  if (!selectedFlight) return
+  if (!selectedFlight) {
+    console.error('[App/Flight] ✗ 未找到指定航班:', flightNo)
+    return
+  }
+  console.log('[App/Flight] ✓ 已选择航班:', selectedFlight)
   
   // 锁定选择
   messageStore.updateMessage(msgId, {
@@ -1152,11 +1209,15 @@ function handleSelectHotel(hotelId: string, _scheduleId: string, msgId: number) 
  * 取消航班选择
  */
 function handleCancelFlight(_scheduleId: string, msgId: number) {
+  console.log('[App/Flight] → 取消航班选择, 消息ID:', msgId)
   const msg = messageStore.getMessage(msgId)
   if (msg && msg.data) {
     messageStore.updateMessage(msgId, {
       data: { ...(msg.data as import('./types').FlightListData), selected: null }
     })
+    console.log('[App/Flight] ✓ 航班选择已取消')
+  } else {
+    console.error('[App/Flight] ✗ 消息不存在')
   }
 }
 
@@ -1164,11 +1225,15 @@ function handleCancelFlight(_scheduleId: string, msgId: number) {
  * 取消酒店选择
  */
 function handleCancelHotel(_scheduleId: string, msgId: number) {
+  console.log('[App/Hotel] → 取消酒店选择, 消息ID:', msgId)
   const msg = messageStore.getMessage(msgId)
   if (msg && msg.data) {
     messageStore.updateMessage(msgId, {
       data: { ...(msg.data as import('./types').HotelListData), selected: null }
     })
+    console.log('[App/Hotel] ✓ 酒店选择已取消')
+  } else {
+    console.error('[App/Hotel] ✗ 消息不存在')
   }
 }
 
@@ -1176,12 +1241,22 @@ function handleCancelHotel(_scheduleId: string, msgId: number) {
  * 确认酒店预订
  */
 function handleConfirmHotel(hotelId: string, scheduleId: string, msgId: number) {
+  console.log('[App/Hotel] ========== 确认酒店选择 ==========')
+  console.log('[App/Hotel] 酒店ID:', hotelId, '日程ID:', scheduleId, '消息ID:', msgId)
+  
   const msg = messageStore.getMessage(msgId)
-  if (!msg || !msg.data) return
+  if (!msg || !msg.data) {
+    console.error('[App/Hotel] ✗ 消息不存在或无数据')
+    return
+  }
   
   const hotelData = msg.data as import('./types').HotelListData
   const selectedHotel = hotelData.hotels.find(h => h.hotelId === hotelId)
-  if (!selectedHotel) return
+  if (!selectedHotel) {
+    console.error('[App/Hotel] ✗ 未找到指定酒店:', hotelId)
+    return
+  }
+  console.log('[App/Hotel] ✓ 已选择酒店:', selectedHotel)
   
   // 锁定选择
   messageStore.updateMessage(msgId, {
@@ -1564,7 +1639,8 @@ function handleDeleteSkill(index: number) {
 
 // 处理创建会议提交
 function handleCreateMeetingSubmit(data: any) {
-  console.log('[App] 创建会议提交:', data)
+  console.log('[App/Meeting] ========== 创建会议提交 ==========')
+  console.log('[App/Meeting] 表单数据:', data)
   
   // 创建会议日程
   const newSchedule: Schedule = {
@@ -1585,20 +1661,26 @@ function handleCreateMeetingSubmit(data: any) {
   }
   
   // 添加到日程存储
+  console.log('[App/Meeting] → 创建日程对象:', newSchedule)
   scheduleStore.addSchedule(newSchedule)
+  console.log('[App/Meeting] ✓ 日程已添加到 store')
   
   // 显示成功消息
   messageStore.addSystemMessage(`✅ 会议创建成功：${data.title}`)
   
   // 关闭模态框
   showCreateMeetingModal.value = false
+  console.log('[App/Meeting] ✓ 模态框已关闭')
   
   // 重置数据
   createMeetingData.value = {}
   
   // 如果有参会人员，询问是否立即通知
   if (data.attendees && data.attendees.length > 0) {
+    console.log('[App/Meeting] → 检测到参会人员，准备询问通知')
+    console.log('[App/Meeting] 参会人员列表:', data.attendees)
     setTimeout(() => {
+      console.log('[App/Meeting] → 弹出通知选项卡片')
       messageStore.addDataMessage('notify_option', '', {
         scheduleId: newSchedule.id,
         scheduleContent: data.title,
@@ -1608,17 +1690,24 @@ function handleCreateMeetingSubmit(data: any) {
         confirmed: false
       } as import('./types').NotifyOptionData)
     }, 300)
+  } else {
+    console.log('[App/Meeting] ⚠ 无参会人员，跳过通知询问')
   }
+  
+  console.log('[App/Meeting] ========== 会议创建完成 ==========')
 }
 
-// 处理出差申请提交（ReAct 模式 - AI 原生闭环）
+// 处理出差申请提交（ReAct 模式 - Skill 驱动）
 async function handleTripApplicationSubmit(data: import('./types').TripApplicationData) {
-  console.log('[App] 出差申请提交:', data)
+  console.log('[App/Trip] ========== 出差申请提交 ==========')
+  console.log('[App/Trip] 表单数据:', data)
   
   // 关闭模态框
   showTripApplication.value = false
+  console.log('[App/Trip] ✓ 表单已关闭')
 
   // 1. 使用TripFormManager创建日程
+  console.log('[App/Trip] → 调用 TripFormManager 创建日程...')
   const schedule = TripFormManager.createScheduleFromForm({
     startDate: data.startDate,
     startTime: data.startTime,
@@ -1629,69 +1718,48 @@ async function handleTripApplicationSubmit(data: import('./types').TripApplicati
     transport: data.transport as import('./types').TransportMode,
     reason: data.reason
   }, data.scheduleId || `TRIP-${Date.now()}`)
+  console.log('[App/Trip] ✓ 日程对象已创建:', schedule.id)
   scheduleStore.addSchedule(schedule)
+  console.log('[App/Trip] ✓ 日程已添加到 store')
 
-  // 2. 模拟审批流程
-  messageStore.addSystemMessage(`📋 出差申请已提交：${data.from} → ${data.to}，审批中...`)
-  await new Promise(r => setTimeout(r, 1000))
-
-  // 3. 同步日程 meta（审批通过）
-  const transportMap: Record<string, import('./types').TransportMode> = {
-    'flight': 'flight',
-    'train': 'train',
-    'car': 'car',
-    'ship': 'ship',
-    'other': 'other'
+  // 2. 使用 Skill Action 处理器执行后续流程
+  console.log('[App/Trip] → 开始 Skill Action 链式执行...')
+  const { executeAction } = await import('./services/react/skills/actionHandlers')
+  const actionContext = {
+    scheduleStore,
+    taskStore,
+    messageStore,
+    configStore,
+    brain
   }
-  scheduleStore.updateSchedule(schedule.id, {
-    meta: {
-      ...(schedule.meta || {}),
-      tripApplied: true,
-      from: data.from,
-      to: data.to,
-      transport: transportMap[data.transport] || undefined
-    }
-  })
-  messageStore.addSystemMessage(`✅ 出差申请已通过!`)
-
-  // 4. 生成 TRIP 场景技能任务
-  const scenario = configStore.getScenario('TRIP')
-  if (scenario && scenario.skills.length > 0) {
-    const newTasks: Task[] = scenario.skills.map(skillCode => {
-      const skillMeta = configStore.getSkill(skillCode)
-      return {
-        id: crypto.randomUUID(),
-        scheduleId: schedule.id,
-        title: skillMeta?.name || skillCode,
-        desc: skillMeta?.description || '',
-        icon: skillMeta?.icon || 'fa-cube',
-        skill: skillCode,
-        actionBtn: '执行',
-        date: data.startDate,
-        status: 'pending' as const
-      }
-    })
-    taskStore.addTasks(newTasks)
-
-    // apply_trip 任务直接标记为已完成（表单已提交 = 申请已完成）
-    const applyTripTask = newTasks.find(t => t.skill === 'apply_trip')
-    if (applyTripTask) {
-      taskStore.completeTask(applyTripTask.id)
-    }
-
-    // 5. 触发统一自动执行确认（AI 原生闭环）
-    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport']
-    const autoTasks = newTasks.filter(task => AUTO_EXECUTABLE_SKILLS.includes(task.skill))
-    if (autoTasks.length > 0) {
-      brain.setMode('WAIT_AUTO_EXEC_CONFIRM')
-      brain.setDraft({
-        scheduleId: schedule.id,
-        autoExecTaskIds: autoTasks.map(t => t.id)
-      })
-      messageStore.addSystemMessage(
-        '已生成交通安排任务,需要我现在自动帮你跑一遍推荐吗?(回复"是"或"否")'
-      )
-    }
+  
+  // 执行审批 action（会自动链式调用后续 action）
+  console.log('[App/Trip] → 执行第一个 action: approve_business_trip')
+  let result = await executeAction('approve_business_trip', {
+    scheduleId: schedule.id,
+    from: data.from,
+    to: data.to,
+    transport: data.transport
+  }, actionContext)
+  console.log('[App/Trip] ✓ 第一个 action 完成:', result.success ? '成功' : '失败')
+  
+  // 链式执行后续 actions
+  let chainStep = 1
+  while (result.success && result.nextAction) {
+    chainStep++
+    console.log(`[App/Trip] → 执行链式 action [${chainStep}]: ${result.nextAction}`)
+    result = await executeAction(
+      result.nextAction,
+      result.nextActionInput || {},
+      actionContext
+    )
+    console.log(`[App/Trip] ✓ 链式 action [${chainStep}] 完成:`, result.success ? '成功' : '失败')
+  }
+  
+  if (!result.success) {
+    console.error('[App/Trip] ✗ Action 链执行失败:', result.error)
+  } else {
+    console.log('[App/Trip] ✓ 所有 Action 链执行完毕')
   }
 
   // 重置表单数据
@@ -1708,6 +1776,8 @@ async function handleTripApplicationSubmit(data: import('./types').TripApplicati
     reason: '',
     status: 'draft'
   }
+  console.log('[App/Trip] ✓ 表单数据已重置')
+  console.log('[App/Trip] ========== 出差申请流程完成 ==========')
 }
 
 // 处理出差表单字段更新
@@ -1724,12 +1794,17 @@ function handleToggleScenarioSkill(scenarioCode: string, skillCode: string) {
 // ==================== 生命周期 ====================
 
 onMounted(async () => {
+  logger.info('App', '========== 应用启动 ==========')
+  logger.info('App', `会话ID: ${logger.getSessionId()}`)
+  logger.info('App', `系统时间: ${new Date().toISOString()}`)
+  
   // 启动通知服务
   startNotificationService(() => scheduleStore.schedules, 30000)
-  console.log('[App] 日程通知服务已启动')
+  logger.info('App', '✓ 日程通知服务已启动')
   
   // 初始化上下文管理器
-  console.log('[App] ContextManager 已就绪')
+  logger.info('App', '✓ ContextManager 已就绪')
+  logger.info('App', '✓ 应用初始化完成')
 })
 
 onUnmounted(() => {
@@ -1795,6 +1870,14 @@ onUnmounted(() => {
             ]"
           >
             传统模式
+          </button>
+          <button
+            @click="showLogViewer = true"
+            class="ml-3 px-3 py-1 rounded-md text-sm bg-purple-500 text-white hover:bg-purple-600 transition-colors"
+            title="查看日志"
+          >
+            <i class="fa-solid fa-file-lines"></i>
+            日志
           </button>
         </div>
         <div class="text-xs text-gray-500">
@@ -1875,6 +1958,12 @@ onUnmounted(() => {
       :initial-data="createMeetingData"
       @close="showCreateMeetingModal = false"
       @submit="handleCreateMeetingSubmit"
+    />
+
+    <!-- Log Viewer Modal -->
+    <LogViewerModal
+      :visible="showLogViewer"
+      @close="showLogViewer = false"
     />
 
     <!-- Trip Application Modal -->

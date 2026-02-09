@@ -33,8 +33,11 @@ watch(() => props.isRecording, (recording, wasRecording) => {
 function handleSend() {
   const text = inputText.value.trim()
   if (text) {
+    console.log('[ChatInput] 📤 用户发送:', text)
     emit('send', text)
     inputText.value = ''
+  } else {
+    console.log('[ChatInput] ⚠ 空消息，未发送')
   }
 }
 

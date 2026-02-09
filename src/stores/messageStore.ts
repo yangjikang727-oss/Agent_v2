@@ -18,9 +18,19 @@ export const useMessageStore = defineStore('message', () => {
 
   // 添加消息
   function addMessage(message: Omit<Message, 'id'>) {
-    messages.value.push({
+    const newMessage = {
       ...message,
       id: nextId++
+    }
+    messages.value.push(newMessage)
+    console.log('[MessageStore] ➕ 添加消息:', {
+      id: newMessage.id,
+      type: newMessage.type,
+      role: newMessage.role,
+      contentPreview: typeof newMessage.content === 'string' 
+        ? newMessage.content.substring(0, 50) + (newMessage.content.length > 50 ? '...' : '')
+        : `[${newMessage.type}]`,
+      hasData: !!newMessage.data
     })
   }
 
@@ -56,15 +66,23 @@ export const useMessageStore = defineStore('message', () => {
 
   // 更新消息
   function updateMessage(id: number, updates: Partial<Message>) {
+    console.log('[MessageStore] ✏️ 更新消息:', id, '更新内容:', Object.keys(updates))
     const msg = messages.value.find(m => m.id === id)
     if (msg) {
       Object.assign(msg, updates)
+      console.log('[MessageStore] ✓ 消息已更新')
+    } else {
+      console.error('[MessageStore] ✗ 未找到消息:', id)
     }
   }
 
   // 获取消息
   function getMessage(id: number): Message | undefined {
-    return messages.value.find(m => m.id === id)
+    const msg = messages.value.find(m => m.id === id)
+    if (!msg) {
+      console.warn('[MessageStore] ⚠ getMessage: 未找到消息', id)
+    }
+    return msg
   }
 
   // 更新参会人表格行

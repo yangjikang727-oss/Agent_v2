@@ -13,6 +13,10 @@ action: open_trip_application_modal
 1. 从用户输入中提取出差参数（目的地、日期、交通方式等）
 2. 无条件、零延迟直接触发 open_trip_application_modal
 3. 将已提取的参数预填到表单中，缺失字段留空由用户补充
+4. 用户提交后，自动执行：
+   - approve_business_trip: 审批出差
+   - generate_trip_task_list: 生成任务列表
+   - ask_auto_execute: 询问是否自动执行推荐
 
 ## 参数说明
 | 参数 | 类型 | 必填 | 说明 | 示例 |
@@ -29,5 +33,17 @@ action: open_trip_application_modal
 ## 重要规则
 - 识别到出差意图后，跳过所有解释和确认，直接触发
 - 一次性推送完整表单，禁止分步填充
-- 不得使用"已为您安排""已创建"等拟真式表述
+- 不得使用“已为您安排”“已创建”等拟真式表述
 - 表单即确认载体，不额外弹窗/提问
+
+## Skill 链式执行
+表单提交后自动触发以下 Action 链：
+```
+open_trip_application_modal (用户提交表单)
+  ↓
+approve_business_trip (审批出差)
+  ↓
+generate_trip_task_list (生成任务)
+  ↓
+ask_auto_execute (询问自动执行)
+```
