@@ -1,5 +1,6 @@
 import type { Tool, ToolContext, ToolResult } from '../services/react/toolRegistry'
 import type { Schedule } from '../types'
+import { timeToMinutes } from '../utils/dateUtils'
 
 /**
  * 日期计算器工具
@@ -104,7 +105,6 @@ export const scheduleQueryTool: Tool = {
         const lowerKeyword = keyword.toLowerCase()
         filtered = filtered.filter((s: Schedule) => 
           s.content.toLowerCase().includes(lowerKeyword) ||
-          (s as any).summary?.toLowerCase().includes(lowerKeyword) ||
           s.location?.toLowerCase().includes(lowerKeyword)
         )
       }
@@ -122,7 +122,6 @@ export const scheduleQueryTool: Tool = {
             date: s.date,
             startTime: s.startTime,
             endTime: s.endTime,
-            summary: (s as any).summary || '',
             content: s.content,
             location: s.location,
             attendees: s.attendees
@@ -176,15 +175,20 @@ export const conflictDetectorTool: Tool = {
       // 过滤同一天的日程
       const sameDaySchedules = schedules.filter((s: Schedule) => s.date === date)
       
-      // 检查时间冲突
+      // 检查时间冲突（使用数值比较，与 scheduleStore.checkConflict 保持一致）
       const conflicts = sameDaySchedules.filter((s: Schedule) => {
         if (!s.startTime || !s.endTime) return false
         
+        const newStart = timeToMinutes(startTime)
+        const newEnd = timeToMinutes(endTime)
+        const existStart = timeToMinutes(s.startTime)
+        const existEnd = timeToMinutes(s.endTime)
+        
         // 时间区间重叠检测
         return (
-          (startTime >= s.startTime && startTime < s.endTime) ||
-          (endTime > s.startTime && endTime <= s.endTime) ||
-          (startTime <= s.startTime && endTime >= s.endTime)
+          (newStart >= existStart && newStart < existEnd) ||
+          (newEnd > existStart && newEnd <= existEnd) ||
+          (newStart <= existStart && newEnd >= existEnd)
         )
       })
       
@@ -195,10 +199,9 @@ export const conflictDetectorTool: Tool = {
           conflictCount: conflicts.length,
           conflicts: conflicts.map((s: Schedule) => ({
             id: s.id,
-            summary: (s as any).summary || '',
+            content: s.content,
             startTime: s.startTime,
-            endTime: s.endTime,
-            content: s.content
+            endTime: s.endTime
           }))
         }
       }

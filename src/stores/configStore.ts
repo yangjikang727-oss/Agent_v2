@@ -13,7 +13,7 @@ export const useConfigStore = defineStore('config', () => {
   const llmProvider = ref<LLMProvider>('openai')  // 使用openai兼容模式
   const llmApiKey = ref('sk-a23f6b429715488ab64eac9d90b15146')
   const llmApiUrl = ref('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions')
-  const llmModel = ref('qwen-max')
+  const llmModel = ref('qwen-plus')
 
   // 兼容旧版 apiKey
   const apiKey = computed({

@@ -25,7 +25,7 @@ async function testScenario1() {
     parameters: [
       { name: 'city', type: 'string', description: '城市名称', required: true }
     ],
-    execute: async (params) => ({
+    execute: async (params: Record<string, any>) => ({
       success: true,
       data: {
         city: params.city,
@@ -71,7 +71,7 @@ async function testScenario2() {
   console.log('  方法:', apiToolConfig.endpoint.method)
   
   // 模拟参数验证
-  const validateParams = (params) => {
+  const validateParams = (params: Record<string, any>) => {
     const errors = []
     if (!params.userId) {
       errors.push('缺少必需参数: userId')
@@ -177,7 +177,7 @@ async function runAllScenarios() {
 }
 
 // 导出测试函数
-window.runReActToolTests = runAllScenarios
+;(window as any).runReActToolTests = runAllScenarios
 
 console.log('\n%c使用方法:', 'font-weight: bold;')
 console.log('在控制台输入: await runReActToolTests()')

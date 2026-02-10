@@ -9,7 +9,6 @@
  */
 
 import type { ToolProvider, ToolAdapter } from './toolAdapter'
-import { bookMeetingRoomTool, applyBusinessTripTool } from './skill/skillToolAdapter'
 
 // ==================== 工具类型定义 ====================
 
@@ -271,11 +270,162 @@ export class ToolRegistry {
 
 export const toolRegistry = new ToolRegistry()
 
-// 注册 Skill 工具
-console.log('[ToolRegistry] 注册 Skill 工具...')
-toolRegistry.registerTool(bookMeetingRoomTool)
-toolRegistry.registerTool(applyBusinessTripTool)
-console.log('[ToolRegistry] Skill 工具注册完成')
+// ==================== Skill 工具动态注册 ====================
+// Skill 工具将由 SkillProvider 动态从 SKILL.md 生成并注册
+// 不再使用硬编码的工具定义
+
+import { skillStore } from './skills/skillStore'
+import { registerCoreTools } from '../../tools'
+
+/**
+ * 从 SKILL.md 动态注册 Skill 工具到 toolRegistry
+ */
+function registerSkillTools(): void {
+  console.log('[ToolRegistry] 开始注册 Skill 工具...')
+  
+  // 加载所有 SKILL.md
+  skillStore.loadAllSkills()
+  
+  // 获取所有 Skill 元数据
+  const allMetadata = skillStore.getAllMetadata()
+  
+  console.log(`[ToolRegistry] 找到 ${allMetadata.length} 个 Skill: ${allMetadata.map(m => m.name).join(', ')}`)
+  
+  // 为每个 Skill 创建工具
+  for (const metadata of allMetadata) {
+    const tool: Tool = {
+      name: metadata.name,
+      description: metadata.description,
+      parameters: extractParametersFromSkill(metadata.name),
+      category: metadata.category as Tool['category'],
+      requireConfirmation: false,
+      
+      async execute(params: Record<string, any>, _context: ToolContext): Promise<ToolResult> {
+        const startTime = Date.now()
+        
+        try {
+          console.log(`[SkillTool:${metadata.name}] 执行`, params)
+          
+          // 返回成功结果，包含 action 信息
+          // ReAct 引擎将根据 action 触发 UI 动作
+          return {
+            success: true,
+            data: {
+              action: metadata.action,
+              skillName: metadata.name,
+              params,
+              taskId: `${metadata.name.toUpperCase()}-${Date.now()}`,
+              message: `已触发 ${metadata.description}`
+            },
+            metadata: {
+              executionTime: Date.now() - startTime,
+              toolName: metadata.name
+            }
+          }
+        } catch (error) {
+          console.error(`[SkillTool:${metadata.name}] 执行失败`, error)
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : '未知错误',
+            metadata: {
+              executionTime: Date.now() - startTime,
+              toolName: metadata.name
+            }
+          }
+        }
+      }
+    }
+    
+    toolRegistry.registerTool(tool)
+    console.log(`[ToolRegistry] 已注册 Skill 工具: ${metadata.name}`)
+  }
+  
+  console.log(`[ToolRegistry] Skill 工具注册完成，共 ${allMetadata.length} 个`)
+}
+
+// 应用启动时自动注册 Skill 工具和核心工具
+registerSkillTools()
+registerCoreTools()
+
+/**
+ * 从 Skill 的 instruction 中提取参数定义
+ */
+function extractParametersFromSkill(skillName: string): ToolParameter[] {
+  const instruction = skillStore.getInstruction(skillName)
+  if (!instruction) return []
+  
+  const parameters: ToolParameter[] = []
+  const instructions = instruction.instructions
+  
+  // 匹配参数表格（简化版：查找 ## 参数说明 后的所有行）
+  const lines = instructions.split('\n')
+  let inParamTable = false
+  let skipHeaderRow = 0
+  
+  for (const line of lines) {
+    if (line.includes('## 参数说明')) {
+      inParamTable = true
+      continue
+    }
+    
+    if (inParamTable) {
+      // 跳过表头和分隔线
+      if (skipHeaderRow < 2) {
+        skipHeaderRow++
+        continue
+      }
+      
+      // 遇到下一个标题，结束解析
+      if (line.trim().startsWith('##')) {
+        break
+      }
+      
+      // 解析参数行
+      if (line.trim().startsWith('|')) {
+        const cells = line.split('|').map(cell => cell.trim()).filter(Boolean)
+        if (cells.length >= 4) {
+          const name = cells[0]
+          const type = cells[1]
+          const required = cells[2]
+          const description = cells[3]
+          
+          if (name && type && required && description) {
+            parameters.push({
+              name: name.trim(),
+              type: normalizeParamType(type.trim()),
+              description: description.trim(),
+              required: false  // Skill 工具参数统一设为非必填，UI 表单负责校验
+            })
+          }
+        }
+      }
+    }
+  }
+  
+  const match = parameters.length > 0
+  
+  if (!match) {
+    console.warn(`[ToolRegistry] Skill "${skillName}" 未找到参数表格`)
+  }
+  
+  return parameters
+}
+
+/**
+ * 规范化参数类型
+ */
+function normalizeParamType(type: string): 'string' | 'number' | 'boolean' | 'array' | 'object' {
+  const lowerType = type.toLowerCase()
+  
+  if (lowerType.includes('array') || lowerType.includes('数组')) return 'array'
+  if (lowerType.includes('number') || lowerType.includes('数字')) return 'number'
+  if (lowerType.includes('bool') || lowerType.includes('布尔')) return 'boolean'
+  if (lowerType.includes('object') || lowerType.includes('对象')) return 'object'
+  
+  return 'string'
+}
+
+// 自动注册 Skill 工具（已在上方统一调用，勿重复）
 
 // ==================== 工具执行辅助函数 ====================
 

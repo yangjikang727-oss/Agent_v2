@@ -9,7 +9,7 @@ import type {
   AttendeeRow,
   TransportMode,
   ParamConfirmData
-} from '../types'
+} from '../../types'
 
 // 模拟通讯录数据
 export const MOCK_DIRECTORY: DirectoryUser[] = [
@@ -219,13 +219,13 @@ export function generateFlightList(
   schedule: Schedule,
   from: string,
   to: string
-): import('../types/skill').SkillResult {
+): import('../../types/skill').SkillResult {
   const startTimeStr = schedule.startTime || '09:00'
   const timeParts = startTimeStr.split(':')
   const baseHour = timeParts[0] ? parseInt(timeParts[0]) : 9
   
   // 根据出发地和目的地生成航班
-  const flights: import('../types/message').FlightOption[] = [
+  const flights: import('../../types/message').FlightOption[] = [
     {
       flightNo: 'CA1502',
       airline: '国航',
@@ -299,7 +299,7 @@ export function generateFlightList(
       flights,
       selected: null,
       locked: false
-    } as import('../types/message').FlightListData
+    } as import('../../types/message').FlightListData
   }
 }
 
@@ -309,9 +309,9 @@ export function generateFlightList(
 export function generateHotelList(
   schedule: Schedule,
   location: string
-): import('../types/skill').SkillResult {
+): import('../../types/skill').SkillResult {
   // 根据地点生成酒店推荐
-  const hotels: import('../types/message').HotelOption[] = [
+  const hotels: import('../../types/message').HotelOption[] = [
     {
       hotelId: 'h001',
       name: '全季酒店',
@@ -391,7 +391,7 @@ export function generateHotelList(
       hotels,
       selected: null,
       locked: false
-    } as import('../types/message').HotelListData
+    } as import('../../types/message').HotelListData
   }
 }
 
@@ -401,10 +401,10 @@ export function generateHotelList(
 export function generateTransportCard(mode: TransportMode, schedule: Schedule): SkillResult {
   const details: Record<TransportMode, { icon: string; title: string; price: number; desc: string }> = {
     flight: { icon: 'fa-plane-up', title: '推荐航班 CA1502', price: 1250, desc: `${schedule.startTime} 出发 | 耗时 2h 30m` },
-    train: { icon: 'fa-train', title: '高铁 G14', price: 550, desc: `${schedule.startTime} 出发 | 耗时 4h 15m` },
+    train: { icon: 'fa-train', title: '火车 G14', price: 550, desc: `${schedule.startTime} 出发 | 耗时 4h 15m` },
     car: { icon: 'fa-car', title: '商务专车', price: 300, desc: '预计 35 分钟到达 | 别克GL8' },
-    ship: { icon: 'fa-ship', title: '轮渡班次 B2', price: 180, desc: `${schedule.startTime} 启航` },
-    other: { icon: 'fa-person-walking', title: '自行前往', price: 0, desc: '无预订' }
+    ship: { icon: 'fa-ship', title: '轮船航班', price: 180, desc: `${schedule.startTime} 出发 | 船程 3h` },
+    other: { icon: 'fa-ellipsis', title: '其他交通方式', price: 0, desc: '请自行安排' }
   }
 
   const info = details[mode] || { icon: 'fa-ticket', title: '未知行程', price: 0, desc: '' }
@@ -441,11 +441,35 @@ const skillHandlers: Record<string, SkillHandler> = {
     const to = meta.to || schedule.location || ''
     
     // 调试输出
-    console.log('[arrange_transport] from:', from, 'to:', to, 'meta:', meta)
+    console.log('[arrange_transport] from:', from, 'to:', to, 'transport:', meta.transport, 'meta:', meta)
     
-    // 如果有出发地和目的地，默认推荐航班列表
+    // 如果有出发地和目的地，根据用户选择的交通方式推荐
     if (from && to) {
-      return generateFlightList(schedule, from, to)
+      const transport = meta.transport as TransportMode | undefined
+      
+      // 根据用户在出差申请表单中选择的交通方式进行推荐
+      if (transport === 'flight') {
+        return generateFlightList(schedule, from, to)
+      } else if (transport === 'train') {
+        return {
+          type: 'action_notice',
+          text: `🚄 已为您查询 ${from} → ${to} 的火车票，请自行在 12306 预订。`
+        }
+      } else if (transport === 'car') {
+        // 汽车：返回可确认的资源卡片
+        return generateTransportCard('car', schedule)
+      } else if (transport === 'ship') {
+        // 轮船：返回可确认的资源卡片
+        return generateTransportCard('ship', schedule)
+      } else if (transport === 'other') {
+        return {
+          type: 'action_notice',
+          text: `🛤️ 您选择了其他交通方式，请自行安排 ${from} → ${to} 的行程。`
+        }
+      } else {
+        // 未指定交通方式，默认推荐航班
+        return generateFlightList(schedule, from, to)
+      }
     }
 
     // 从内容中识别交通方式
@@ -548,7 +572,7 @@ const skillHandlers: Record<string, SkillHandler> = {
         transport: transport,
         reason: schedule.content || '',
         status: 'draft'
-      } as import('../types/message').TripApplicationData
+      } as import('../../types/message').TripApplicationData
     }
   },
 

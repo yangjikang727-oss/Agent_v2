@@ -106,7 +106,7 @@ export const useScheduleStore = defineStore('schedule', () => {
     }
   }
 
-  // 检测时间冲突（使用数字比较避免字符串格式问题）
+  // 检测时间冲突（使用数字比较避免字符串格式问题，支持跨天日程）
   function checkConflict(date: string, startTime: string, endTime: string, excludeId?: string): Schedule | null {
     // 防护：参数无效时返回 null
     if (!date || !startTime || !endTime) {
@@ -118,8 +118,12 @@ export const useScheduleStore = defineStore('schedule', () => {
     const newEnd = timeToMinutes(endTime)
     
     return schedules.value.find(s => {
-      if (s.date !== date) return false
       if (s.id === excludeId) return false
+      
+      // 检查日期是否相关：同一天，或者新日程日期落在跨天日程的日期范围内
+      const dateMatch = s.date === date || 
+        (s.endDate && date >= s.date && date <= s.endDate)
+      if (!dateMatch) return false
       
       const existStart = timeToMinutes(s.startTime)
       const existEnd = timeToMinutes(s.endTime)

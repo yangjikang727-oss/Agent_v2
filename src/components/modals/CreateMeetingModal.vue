@@ -1,6 +1,6 @@
 <template>
   <BaseModal
-    :visible="visible"
+    :show="visible"
     @close="handleClose"
     title="创建会议"
     width="600px"
@@ -96,7 +96,7 @@
             />
             <BaseButton
               @click="addAttendee"
-              size="small"
+              size="sm"
               variant="primary"
             >
               添加
@@ -160,7 +160,7 @@
   </BaseModal>
 </template>
 
-<script setup>
+<script setup lang="ts">
 import { ref, reactive, computed, watch } from 'vue'
 import BaseModal from '../common/BaseModal.vue'
 import BaseButton from '../common/BaseButton.vue'
@@ -189,11 +189,11 @@ const formData = reactive({
   endTime: '',
   location: '',
   roomType: '',
-  attendees: [],
+  attendees: [] as string[],
   remarks: ''
 })
 
-const errors = reactive({
+const errors = reactive<Record<string, string>>({
   title: '',
   startTime: '',
   endTime: '',
@@ -233,7 +233,7 @@ const initializeForm = () => {
 }
 
 // 验证单个字段
-const validateField = (fieldName) => {
+const validateField = (fieldName: string) => {
   errors[fieldName] = ''
   
   switch (fieldName) {
@@ -288,7 +288,7 @@ const addAttendee = () => {
 }
 
 // 删除参会人员
-const removeAttendee = (index) => {
+const removeAttendee = (index: number) => {
   formData.attendees.splice(index, 1)
 }
 

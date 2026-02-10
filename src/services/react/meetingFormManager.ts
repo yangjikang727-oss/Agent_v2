@@ -70,7 +70,7 @@ export class MeetingFormManager {
    */
   static generateTaskForm(
     fields: MeetingFormFields,
-    scheduleId: string
+    _scheduleId: string
   ): {
     formTitle: string
     formFields: Array<{
@@ -152,7 +152,7 @@ export class MeetingFormManager {
    * 生成通知确认提示
    */
   static generateNotificationPrompt(
-    fields: MeetingFormFields,
+    _fields: MeetingFormFields,
     schedule: Schedule
   ): string {
     const timeRange = `${schedule.startTime}-${schedule.endTime}`

@@ -57,7 +57,7 @@ export function createPersistPlugin(globalPrefix: string = 'agent3') {
               partial[path] = parsed[path]
             }
           }
-          store.$patch(partial)
+          store.$patch(partial as any)
         } else {
           store.$patch(parsed)
         }

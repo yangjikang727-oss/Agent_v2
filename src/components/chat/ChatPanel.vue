@@ -14,6 +14,7 @@ import FlightList from './FlightList.vue'
 import HotelList from './HotelList.vue'
 import TripApplication from './TripApplication.vue'
 import NotifyOption from './NotifyOption.vue'
+import PaymentOrderList from './PaymentOrderList.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -41,8 +42,10 @@ const emit = defineEmits<{
   selectTransport: [option: TransportOption, msgId: number, data: TransportSelectorData]
   selectFlight: [flightNo: string, scheduleId: string, msgId: number]
   confirmFlight: [flightNo: string, scheduleId: string, msgId: number]
+  cancelFlight: [scheduleId: string, msgId: number]
   selectHotel: [hotelId: string, scheduleId: string, msgId: number]
   confirmHotel: [hotelId: string, scheduleId: string, msgId: number]
+  cancelHotel: [scheduleId: string, msgId: number]
   submitTripApplication: [data: TripApplicationData, msgId: number]
   selectNotifyOption: [option: 'now' | 'before_1h', scheduleId: string, msgId: number]
   skipNotify: [scheduleId: string, msgId: number]
@@ -118,6 +121,10 @@ function isTripApplication(msg: Message): msg is Message & { data: TripApplicati
 
 function isNotifyOption(msg: Message): msg is Message & { data: NotifyOptionData } {
   return msg.type === 'notify_option' && msg.data !== null && 'attendees' in (msg.data as object)
+}
+
+function isPaymentOrder(msg: Message): msg is Message & { data: import('../../types').PaymentOrderData } {
+  return msg.type === 'payment_order' && msg.data !== null && 'orders' in (msg.data as object)
 }
 
 defineExpose({
@@ -240,6 +247,7 @@ defineExpose({
             :data="msg.data"
             @selectFlight="emit('selectFlight', $event, msg.data.scheduleId, msg.id)"
             @confirmFlight="emit('confirmFlight', $event, msg.data.scheduleId, msg.id)"
+            @cancelFlight="emit('cancelFlight', msg.data.scheduleId, msg.id)"
           />
 
           <!-- Hotel List -->
@@ -248,6 +256,7 @@ defineExpose({
             :data="msg.data"
             @selectHotel="emit('selectHotel', $event, msg.data.scheduleId, msg.id)"
             @confirmHotel="emit('confirmHotel', $event, msg.data.scheduleId, msg.id)"
+            @cancelHotel="emit('cancelHotel', msg.data.scheduleId, msg.id)"
           />
 
           <!-- Trip Application -->
@@ -263,6 +272,12 @@ defineExpose({
             :data="msg.data"
             @select="(opt) => emit('selectNotifyOption', opt, msg.data.scheduleId, msg.id)"
             @skip="() => emit('skipNotify', msg.data.scheduleId, msg.id)"
+          />
+
+          <!-- Payment Order List -->
+          <PaymentOrderList
+            v-if="isPaymentOrder(msg)"
+            :data="msg.data"
           />
         </ChatMessage>
       </TransitionGroup>

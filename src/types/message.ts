@@ -18,6 +18,7 @@ export type MessageType =
   | 'hotel_list'          // 酒店列表类型
   | 'trip_application'    // 出差申请表单
   | 'notify_option'       // 通知参会人选项
+  | 'payment_order'       // 待支付订单
 
 // 交通选项
 export interface TransportOption {
@@ -103,6 +104,26 @@ export interface NotifyOptionData {
   confirmed: boolean        // 是否已确认
 }
 
+// 待支付订单项
+export interface PaymentOrderItem {
+  id: string                // 订单ID
+  type: 'flight' | 'hotel'  // 订单类型
+  title: string             // 订单标题
+  details: string           // 订单详情
+  price: number             // 价格
+  paymentUrl: string        // 支付链接
+  status: 'pending' | 'paid' | 'cancelled'  // 订单状态
+}
+
+// 待支付订单数据
+export interface PaymentOrderData {
+  scheduleId: string
+  taskId?: string
+  orders: PaymentOrderItem[]   // 订单列表
+  totalAmount: number          // 总金额
+  confirmed: boolean           // 是否已确认查看
+}
+
 // 资源卡片数据
 export interface ResourceCardData {
   icon: string
@@ -178,5 +199,5 @@ export interface Message {
   type: MessageType
   content: string
   thoughts?: string[]
-  data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | null
+  data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | PaymentOrderData | null
 }

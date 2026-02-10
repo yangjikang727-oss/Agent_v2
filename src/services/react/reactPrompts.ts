@@ -3,6 +3,45 @@
 /** ReAct各阶段提示词 */
 export const REACT_PROMPTS = {
   /**
+   * 系统提示词（多轮对话的 system message）
+   * 包含角色、工具列表、输出格式，不包含用户输入
+   */
+  SYSTEM: (toolsSummary: string, currentDate: string) => `你是一个日程意图识别引擎。你的唯一任务是：识别日程类型 + 提取信息 + 立即调用工具。
+
+当前日期：${currentDate}
+
+## 核心规则（必须严格遵守）
+1. 从用户输入中判断日程类型（会议/出差/其他）
+2. 尽可能多地提取信息（时间、地点、人员、主题等），提取不到的参数不传
+3. 识别到会议或出差意图后，立即调用对应工具，一步完成，不要犹豫
+4. **绝对禁止**询问用户补充信息、解释、确认，表单会处理缺失字段
+5. 如果无法识别为任何日程类型（纯闲聊/问答），直接用 Final Answer 回复
+
+## 日期时间转换规则
+- "今天" → ${currentDate}
+- "明天" → 基于当前日期 +1 天
+- "后天" → 基于当前日期 +2 天
+- "下午3点" → 15:00，"上午10点" → 10:00
+- 未指定日期时默认 ${currentDate}
+
+## 可用工具
+${toolsSummary || '（暂无可用工具）'}
+
+## 输出格式
+Thought: [一句话说明识别到的意图类型和提取到的信息]
+Action: [工具名称]
+Action Input: {参数JSON，必须写在同一行}
+
+非日程类请求：
+Thought: [说明这不是日程请求]
+Final Answer: [直接回复用户]
+
+重要：
+- Action Input 的 JSON 必须写在同一行，不要换行。
+- Action 必须使用上面可用工具列表中的精确名称，不要编造工具名。
+- 只需一步：识别 → 调用。不要多轮推理，不要追问。`,
+
+  /**
    * 思维链推理阶段提示词
    */
   THINK: (toolsSummary: string, currentDate: string, userQuery: string, historyContext?: string) => `你是一个专业的日程管理AI助手，帮助用户安排会议、出差等日程。
@@ -24,21 +63,50 @@ ${toolsSummary || '（暂无可用工具）'}
 
 ## 输出格式
 当信息完整时，直接调用工具：
-Thought: [分析已收集的信息]
-Action: book_meeting_room
-Action Input: {"title": "会议主题", "date": "日期", "startTime": "开始时间", "endTime": "结束时间", "attendees": ["参会人"], "location": "地点"}
+Thought: [分析已收集的信息，判断应调用哪个工具]
+Action: [上面工具列表中的工具名称]
+Action Input: {参数JSON，必须写在同一行}
 
 当需要更多信息时：
 Thought: [说明缺少什么信息]
 Final Answer: [简洁地询问一个问题]
 
+重要：Action Input 的 JSON 必须写在同一行，不要换行。
+
 用户请求：${userQuery}`,
+
+  /**
+   * Skill 参数提取提示词（第二层披露）
+   * 将匹配到的 Skill 指令 + 用户输入发给 LLM，提取结构化参数
+   */
+  SKILL_EXTRACT: (skillInstructions: string, currentDate: string, userQuery: string) => `你是一个参数提取引擎。根据以下技能指令中的参数说明，从用户输入中提取所有能识别的参数。
+
+当前日期：${currentDate}
+
+## 技能指令
+${skillInstructions}
+
+## 用户输入
+"${userQuery}"
+
+## 输出要求
+返回 JSON 格式（不要添加任何其他内容）：
+{"params": {"参数名": "提取的值", ...}, "confidence": 0.0-1.0, "reasoning": "提取逻辑"}
+
+注意：
+- 只提取能从用户输入中确认的参数，不要编造
+- 时间格式转为 HH:mm（如 "下午3点" → "15:00"）
+- 日期相对词转为具体日期（如 "明天" → 基于当前日期计算）
+- 参会人/人员转为数组格式`,
 
   /**
    * 观察阶段提示词
    */
-  OBSERVE: (observation: string, _toolsSummary: string) => `工具执行结果：
+  OBSERVE: (observation: string, toolsSummary: string) => `工具执行结果：
 ${observation}
+
+## 可用工具
+${toolsSummary || '（暂无可用工具）'}
 
 请基于以上观察结果继续推理。你可以：
 1. 根据结果调整策略
@@ -47,8 +115,10 @@ ${observation}
 
 请继续按照以下格式输出：
 Thought: [基于观察结果的进一步推理]
-Action: [下一个要调用的工具名称] 或 Final Answer
-Action Input: [工具参数json] 或 [最终回答]`,
+Action: [上面工具列表中的工具名称] 或 Final Answer
+Action Input: [工具参数json] 或 [最终回答]
+
+重要：Action 必须使用上面可用工具列表中的精确名称，不要编造工具名。`,
 
   /**
    * 最终回答阶段提示词
@@ -87,6 +157,39 @@ export interface ReActStep {
 }
 
 /**
+ * 尝试从响应中解析多行JSON（Action Input 跨行场景）
+ */
+function tryParseMultiLineJSON(response: string): any {
+  // 查找 Action Input: 后的内容，从第一个 { 到最后一个 }
+  const inputStart = response.search(/(?:Action Input|参数|输入)[:：]/i)
+  if (inputStart === -1) return undefined
+  
+  const afterLabel = response.slice(inputStart)
+  const braceStart = afterLabel.indexOf('{')
+  if (braceStart === -1) return undefined
+  
+  const jsonCandidate = afterLabel.slice(braceStart)
+  
+  // 从开头的 { 开始，找到配对的 }
+  let depth = 0
+  for (let i = 0; i < jsonCandidate.length; i++) {
+    if (jsonCandidate[i] === '{') depth++
+    else if (jsonCandidate[i] === '}') depth--
+    
+    if (depth === 0) {
+      const jsonStr = jsonCandidate.slice(0, i + 1)
+      try {
+        return JSON.parse(jsonStr)
+      } catch {
+        return jsonStr.trim()
+      }
+    }
+  }
+  
+  return undefined
+}
+
+/**
  * 解析ReAct响应文本
  */
 export function parseReActResponse(response: string): ReActStep {
@@ -106,13 +209,18 @@ export function parseReActResponse(response: string): ReActStep {
     if (actionValue.toLowerCase() !== 'final answer' && actionValue !== '最终答案') {
       step.action = actionValue
       
-      const inputMatch = response.match(/(?:Action Input|参数|输入)[:：]\s*({.*?})(?=\n|$)/is)
-      if (inputMatch && inputMatch[1]) {
+      // 先尝试单行JSON匹配
+      const singleLineMatch = response.match(/(?:Action Input|参数|输入)[:：]\s*({.*})$/im)
+      if (singleLineMatch && singleLineMatch[1]) {
         try {
-          step.actionInput = JSON.parse(inputMatch[1])
-        } catch (e) {
-          step.actionInput = inputMatch[1].trim()
+          step.actionInput = JSON.parse(singleLineMatch[1])
+        } catch {
+          // 单行解析失败，尝试多行JSON
+          step.actionInput = tryParseMultiLineJSON(response)
         }
+      } else {
+        // 没有单行匹配，尝试多行JSON
+        step.actionInput = tryParseMultiLineJSON(response)
       }
     }
   }
@@ -133,9 +241,26 @@ export function parseReActResponse(response: string): ReActStep {
     }
   }
   
-  // 兜底：如果没有解析到任何标准格式，且没有Action，将整个响应作为最终答案
+  // 兜底1：有 Thought 但无 Action 也无 Final Answer → LLM 直接在 Thought 后写了回答
+  if (step.thought && !step.action && !step.finalAnswer) {
+    // 提取 Thought 行之后的剩余文本作为答案
+    const lines = response.split('\n')
+    const thoughtLineIdx = lines.findIndex(l => /(?:Thought|思考|分析)[:：]/i.test(l))
+    if (thoughtLineIdx >= 0 && thoughtLineIdx < lines.length - 1) {
+      const afterThought = lines.slice(thoughtLineIdx + 1).join('\n').trim()
+      if (afterThought) {
+        step.finalAnswer = afterThought
+      } else {
+        // Thought 之后没有内容，将 Thought 本身作为答案
+        step.finalAnswer = step.thought
+      }
+    } else {
+      step.finalAnswer = step.thought
+    }
+  }
+  
+  // 兜底2：如果没有解析到任何标准格式，将整个响应作为最终答案
   if (!step.thought && !step.action && !step.finalAnswer) {
-    // LLM直接给出了回答，没有使用标准格式
     step.finalAnswer = response.trim()
   }
   
