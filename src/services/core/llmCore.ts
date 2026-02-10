@@ -219,6 +219,142 @@ export async function callLLMRaw(
   return null
 }
 
+/**
+ * 多轮对话 LLM 调用（返回原始文本）
+ * 用于 ReAct 推理循环：每步将 LLM 回复和 Observation 追加到 messages 中
+ */
+export async function callLLMRawChat(
+  messages: Array<{role: string, content: string}>,
+  config: LLMConfig,
+  signal?: AbortSignal
+): Promise<string | null> {
+  if (!config.apiKey) {
+    console.warn('[LLM] No API Key provided.')
+    return null
+  }
+
+  // Gemini provider: 转换为 Gemini 多轮格式
+  if (config.provider === 'gemini') {
+    return callGeminiRawChat(messages, config, signal)
+  }
+
+  // OpenAI 兼容格式
+  const url = config.apiUrl || DEFAULT_CONFIGS.openai.url
+  const model = config.model || DEFAULT_CONFIGS.openai.model
+
+  const payload = {
+    model,
+    messages
+    // 不使用 response_format: json_object，返回原始文本
+  }
+
+  for (let i = 0; i <= RETRY_DELAYS.length; i++) {
+    try {
+      // 已取消则直接抛出
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.apiKey}`
+        },
+        body: JSON.stringify(payload),
+        signal
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`HTTP ${response.status}: ${errorText}`)
+      }
+
+      const data = await response.json()
+      const text = data.choices?.[0]?.message?.content
+      if (!text) throw new Error('Empty response from LLM')
+
+      return text
+    } catch (error) {
+      // 如果是被取消的请求，直接抛出不重试
+      if (signal?.aborted || (error as Error).name === 'AbortError') {
+        throw error
+      }
+      console.warn(`[LLM RawChat] Attempt ${i + 1} failed:`, error)
+      if (i === RETRY_DELAYS.length) {
+        console.error('[LLM RawChat] All retries failed')
+        return null
+      }
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i]))
+    }
+  }
+
+  return null
+}
+
+/**
+ * Gemini 多轮对话（返回原始文本）
+ */
+async function callGeminiRawChat(
+  messages: Array<{role: string, content: string}>,
+  config: LLMConfig,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const url = `${config.apiUrl || DEFAULT_CONFIGS.gemini.url}?key=${config.apiKey}`
+
+  // 提取 system 指令
+  const systemMsg = messages.find(m => m.role === 'system')
+  const chatMessages = messages.filter(m => m.role !== 'system')
+
+  // 转换为 Gemini contents 格式
+  const contents = chatMessages.map(m => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }))
+
+  const payload: any = {
+    contents,
+    // 不设置 responseMimeType，返回原始文本
+  }
+  if (systemMsg) {
+    payload.systemInstruction = { parts: [{ text: systemMsg.content }] }
+  }
+
+  for (let i = 0; i <= RETRY_DELAYS.length; i++) {
+    try {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`HTTP ${response.status}: ${errorText}`)
+      }
+
+      const data = await response.json()
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text
+      if (!text) throw new Error('Empty response from Gemini')
+
+      return text
+    } catch (error) {
+      if (signal?.aborted || (error as Error).name === 'AbortError') {
+        throw error
+      }
+      console.warn(`[Gemini RawChat] Attempt ${i + 1} failed:`, error)
+      if (i === RETRY_DELAYS.length) {
+        console.error('[Gemini RawChat] All retries failed')
+        return null
+      }
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[i]))
+    }
+  }
+
+  return null
+}
+
 // ==================== 兼容旧接口 (废弃警告) ====================
 
 /** @deprecated 请使用 callLLM */

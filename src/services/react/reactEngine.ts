@@ -8,10 +8,9 @@
  */
 
 import type { LLMConfig } from '../core/llmCore'
-import { callLLMRaw } from '../core/llmCore'
+import { callLLMRawChat } from '../core/llmCore'
 import { toolRegistry, type ToolContext, type ToolResult } from './toolRegistry'
 import { REACT_PROMPTS, parseReActResponse, formatObservation, type ReActStep } from './reactPrompts'
-import { skillStore } from './skills/skillStore'
 import type { BrainState } from '../../types'
 
 // ==================== ReAct引擎配置 ====================
@@ -21,13 +20,149 @@ export interface ReActConfig {
   maxRetries: number      // 工具调用最大重试次数
   timeout: number         // 单次调用超时时间(ms)
   enableLogging: boolean  // 是否启用详细日志
+  enableQuickMatch: boolean // 是否启用快速意图匹配
 }
 
 const DEFAULT_CONFIG: ReActConfig = {
-  maxSteps: 8,
-  maxRetries: 3,
-  timeout: 60000,
-  enableLogging: true
+  maxSteps: 3,           // 单轮识别模式，无需多轮推理
+  maxRetries: 2,
+  timeout: 20000,
+  enableLogging: true,
+  enableQuickMatch: true // 启用快速意图匹配（兜底）
+}
+
+// ==================== 快速意图匹配 ====================
+
+interface QuickMatchResult {
+  matched: boolean
+  skillName?: string
+  action?: string
+  params?: Record<string, any>
+}
+
+/**
+ * 快速意图匹配 - 无需 LLM 调用，直接匹配常见意图
+ */
+function tryQuickSkillMatch(query: string, currentDate: string): QuickMatchResult {
+  const normalizedQuery = query.toLowerCase().trim()
+  
+  // 会议相关关键词
+  const meetingPatterns = [
+    { pattern: /预定|预约|安排|创建.*会议|开个会|约个会/, skill: 'book_meeting_room' },
+    { pattern: /会议室|开会|会议|例会|讨论|沟通/, skill: 'book_meeting_room' }
+  ]
+  
+  // 出差相关关键词
+  const tripPatterns = [
+    { pattern: /申请.*出差|安排.*出差|出差.*申请|要去.*出差/, skill: 'apply_business_trip' },
+    { pattern: /出差|差旅|飞.*去|前往.*出差/, skill: 'apply_business_trip' }
+  ]
+  
+  // 尝试匹配会议
+  for (const { pattern, skill } of meetingPatterns) {
+    if (pattern.test(normalizedQuery)) {
+      // 提取可能的时间信息
+      const timeMatch = normalizedQuery.match(/(\d{1,2})[:点](\d{0,2})|([上下])午/)
+      const dateMatch = normalizedQuery.match(/今天|明天|后天|(\d{1,2})月(\d{1,2})日/)
+      
+      return {
+        matched: true,
+        skillName: skill,
+        action: 'open_create_meeting_modal',
+        params: {
+          title: extractTitle(normalizedQuery, 'meeting'),
+          startTime: timeMatch ? extractTime(normalizedQuery) : undefined,
+          date: dateMatch ? extractDate(normalizedQuery, currentDate) : currentDate
+        }
+      }
+    }
+  }
+  
+  // 尝试匹配出差
+  for (const { pattern, skill } of tripPatterns) {
+    if (pattern.test(normalizedQuery)) {
+      // 提取出发地和目的地
+      const fromToMatch = normalizedQuery.match(/从(.+?)[到去飞](.+?)[的出差]|(.+?)[到去飞](.+?)/)
+      
+      return {
+        matched: true,
+        skillName: skill,
+        action: 'open_trip_application_modal',
+        params: {
+          from: fromToMatch ? (fromToMatch[1] || fromToMatch[3]) : undefined,
+          to: fromToMatch ? (fromToMatch[2] || fromToMatch[4]) : undefined,
+          startDate: currentDate
+        }
+      }
+    }
+  }
+  
+  return { matched: false }
+}
+
+/**
+ * 从查询中提取标题
+ */
+function extractTitle(query: string, type: 'meeting' | 'trip'): string {
+  // 尝试提取引号内的内容
+  const quoteMatch = query.match(/[""'](.+?)[""']/)
+  if (quoteMatch && quoteMatch[1]) return quoteMatch[1]
+  
+  // 会议：提取"关于...的会议"或"...讨论"
+  if (type === 'meeting') {
+    const aboutMatch = query.match(/关于(.+?)(?:的会议|讨论|沟通)/)
+    if (aboutMatch && aboutMatch[1]) return aboutMatch[1]
+    
+    // 简单提取前 10 个字符作为标题
+    return query.replace(/预定|预约|安排|创建|会议|开个会|约个会/g, '').trim().slice(0, 10) || '会议'
+  }
+  
+  return ''
+}
+
+/**
+ * 从查询中提取时间
+ */
+function extractTime(query: string): string | undefined {
+  const hourMatch = query.match(/(\d{1,2})[:点](\d{0,2})/)
+  if (hourMatch && hourMatch[1]) {
+    const hour = parseInt(hourMatch[1])
+    const minute = hourMatch[2] ? parseInt(hourMatch[2]) : 0
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  }
+  
+  // 上午/下午
+  if (query.includes('上午')) return '09:00'
+  if (query.includes('下午')) return '14:00'
+  if (query.includes('晚上')) return '19:00'
+  
+  return undefined
+}
+
+/**
+ * 从查询中提取日期
+ */
+function extractDate(query: string, currentDate: string): string {
+  if (query.includes('今天')) return currentDate
+  if (query.includes('明天')) {
+    const d = new Date(currentDate)
+    d.setDate(d.getDate() + 1)
+    return d.toISOString().split('T')[0] || currentDate
+  }
+  if (query.includes('后天')) {
+    const d = new Date(currentDate)
+    d.setDate(d.getDate() + 2)
+    return d.toISOString().split('T')[0] || currentDate
+  }
+  
+  // 具体日期 MM月DD日
+  const dateMatch = query.match(/(\d{1,2})月(\d{1,2})日/)
+  if (dateMatch && dateMatch[1] && dateMatch[2]) {
+    const year = new Date().getFullYear()
+    return `${year}-${String(parseInt(dateMatch[1])).padStart(2, '0')}-${String(parseInt(dateMatch[2])).padStart(2, '0')}`
+  }
+  
+  return currentDate
 }
 
 // ==================== ReAct引擎核心类 ====================
@@ -57,7 +192,6 @@ export class ReActEngine {
       scheduleStore: any
       taskStore: any
       brainState?: BrainState
-      conversationHistory?: Array<{role: string, content: string}>
     }
   ): Promise<{
     finalAnswer: string
@@ -75,32 +209,30 @@ export class ReActEngine {
     }
     
     try {
-      // 确保 Skill 系统已初始化（Skill 作为工具注册到 toolRegistry）
-      skillStore.loadAllSkills()
-      
-      // ==================== ReAct 推理循环 ====================
-      this.log('[ReAct] 开始推理循环')
+      // ==================== ReAct 推理循环（单轮识别+表单模式） ====================
+      this.log('[ReAct] 开始推理循环（单轮识别模式）')
       
       const toolsSummary = toolRegistry.getToolsSummary()
-      const historyContext = context.conversationHistory && context.conversationHistory.length > 0
-        ? this.buildHistoryContext(context.conversationHistory)
-        : ''
       
-      let currentPrompt = REACT_PROMPTS.THINK(toolsSummary, context.currentDate, query, historyContext)
-      let llmResponse = ''
+      // 构建单轮对话 messages 数组
+      const messages: Array<{role: string, content: string}> = [
+        { role: 'system', content: REACT_PROMPTS.SYSTEM(toolsSummary, context.currentDate) },
+        { role: 'user', content: `用户请求：${query}` }
+      ]
+      
+      let toolNotFoundCount = 0  // 连续工具未找到计数器
       
       for (let step = 0; step < this.config.maxSteps; step++) {
-        this.log(`[Step ${step + 1}] 发送提示词到LLM`)
+        this.log(`[Step ${step + 1}] 发送 ${messages.length} 条消息到 LLM`)
         
-        const response = await this.callLLMWithTimeout(currentPrompt)
+        const response = await this.callLLMWithTimeout(messages)
         if (!response) {
           throw new Error('LLM调用超时或失败')
         }
         
-        llmResponse = response
-        this.log(`[Step ${step + 1}] LLM响应: ${llmResponse}`)
+        this.log(`[Step ${step + 1}] LLM响应: ${response.substring(0, 200)}...`)
         
-        const parsedStep = parseReActResponse(llmResponse)
+        const parsedStep = parseReActResponse(response)
         steps.push(parsedStep)
         
         if (parsedStep.finalAnswer) {
@@ -111,6 +243,36 @@ export class ReActEngine {
         if (parsedStep.action && parsedStep.action !== 'Final Answer') {
           this.log(`执行工具: ${parsedStep.action}`)
           
+          // 提前检查工具是否存在
+          if (!toolRegistry.hasTool(parsedStep.action)) {
+            toolNotFoundCount++
+            this.log(`⚠ 工具 "${parsedStep.action}" 不存在 (连续 ${toolNotFoundCount} 次)`)
+            
+            if (toolNotFoundCount >= 2) {
+              this.log('连续多次调用不存在的工具，提前退出')
+              return {
+                finalAnswer: `抱歉，我无法找到合适的工具来处理您的请求。可用工具: ${toolsSummary.split('\n').map(l => l.split('[')[0]).join(', ')}`,
+                steps,
+                success: false,
+                error: `连续 ${toolNotFoundCount} 次调用不存在的工具`
+              }
+            }
+            
+            // 第一次未找到，给 LLM 一次纠正机会
+            const lastIndex = steps.length - 1
+            if (lastIndex >= 0 && steps[lastIndex]) {
+              steps[lastIndex].observation = `❌ 工具 "${parsedStep.action}" 不存在，请从可用工具列表中选择正确的工具名称。`
+            }
+            
+            // 将 LLM 回复和错误信息追加到对话历史
+            messages.push({ role: 'assistant', content: response })
+            messages.push({ role: 'user', content: `Observation: ❌ 工具 "${parsedStep.action}" 不存在。请仔细检查可用工具列表，选择正确的工具名称。` })
+            continue
+          }
+          
+          // 工具存在，重置计数器
+          toolNotFoundCount = 0
+          
           const toolResult = await this.executeToolWithRetry(
             parsedStep.action,
             parsedStep.actionInput || {},
@@ -118,7 +280,7 @@ export class ReActEngine {
           )
           
           const observation = formatObservation(parsedStep.action, toolResult)
-          this.log(`工具执行结果: ${observation}`)
+          this.log(`工具执行结果: ${observation.substring(0, 200)}`)
           
           const lastIndex = steps.length - 1
           if (lastIndex >= 0 && steps[lastIndex]) {
@@ -150,14 +312,45 @@ export class ReActEngine {
             }
           }
           
-          currentPrompt = REACT_PROMPTS.OBSERVE(observation, toolsSummary)
+          // 将 LLM 回复和工具观测结果追加到对话历史
+          messages.push({ role: 'assistant', content: response })
+          messages.push({ role: 'user', content: `Observation: ${observation}` })
         } else {
-          const finalAnswer = this.extractFinalAnswer(llmResponse)
+          const finalAnswer = this.extractFinalAnswer(response)
           if (finalAnswer) {
             return { finalAnswer, steps, success: true }
           }
           
-          currentPrompt = REACT_PROMPTS.OBSERVE('请继续思考或给出最终答案', toolsSummary)
+          // 无法解析，追加到对话并提示继续
+          messages.push({ role: 'assistant', content: response })
+          messages.push({ role: 'user', content: '请继续思考并给出最终答案（使用 Final Answer: 格式）' })
+        }
+      }
+      
+      // ==================== 兜底：关键字快速匹配 ====================
+      // 当 ReAct 循环未能成功处理时，使用关键字匹配兜底
+      if (this.config.enableQuickMatch) {
+        this.log('[ReAct] ReAct循环未返回结果，尝试关键字兜底匹配')
+        const quickMatch = tryQuickSkillMatch(query, context.currentDate)
+        if (quickMatch.matched && quickMatch.action) {
+          this.log(`[ReAct] 兜底匹配到技能: ${quickMatch.skillName}`)
+          
+          const quickStep: ReActStep = {
+            thought: `ReAct循环未返回结果，兜底匹配到技能: ${quickMatch.skillName}`,
+            action: quickMatch.action,
+            actionInput: {
+              formData: quickMatch.params,
+              taskId: `${quickMatch.skillName?.toUpperCase()}-${Date.now()}`
+            },
+            observation: '已通过关键字兜底匹配'
+          }
+          steps.push(quickStep)
+          
+          return {
+            finalAnswer: ' ',
+            steps,
+            success: true
+          }
         }
       }
       
@@ -165,6 +358,33 @@ export class ReActEngine {
       
     } catch (error) {
       this.log(`ReAct执行出错: ${error}`)
+      
+      // ==================== 异常兜底：关键字快速匹配 ====================
+      if (this.config.enableQuickMatch) {
+        this.log('[ReAct] ReAct执行异常，尝试关键字兜底匹配')
+        const quickMatch = tryQuickSkillMatch(query, context.currentDate)
+        if (quickMatch.matched && quickMatch.action) {
+          this.log(`[ReAct] 异常兜底匹配到技能: ${quickMatch.skillName}`)
+          
+          const quickStep: ReActStep = {
+            thought: `ReAct执行异常，兜底匹配到技能: ${quickMatch.skillName}`,
+            action: quickMatch.action,
+            actionInput: {
+              formData: quickMatch.params,
+              taskId: `${quickMatch.skillName?.toUpperCase()}-${Date.now()}`
+            },
+            observation: 'ReAct异常，已通过关键字兜底匹配'
+          }
+          steps.push(quickStep)
+          
+          return {
+            finalAnswer: ' ',
+            steps,
+            success: true
+          }
+        }
+      }
+      
       return {
         finalAnswer: `处理过程中出现错误: ${(error as Error).message}`,
         steps,
@@ -201,8 +421,12 @@ export class ReActEngine {
         this.log(`工具执行失败 (尝试 ${attempt + 1}/${this.config.maxRetries + 1}): ${(error as Error).message}`)
         
         if (attempt < this.config.maxRetries) {
-          // 等待后重试
-          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
+          // 只对远程 API 调用添加延迟，本地工具立即重试
+          const isRemoteTool = toolName.includes('api') || toolName.includes('http') || toolName.includes('remote')
+          if (isRemoteTool) {
+            await new Promise(resolve => setTimeout(resolve, 500)) // 固定 500ms，而非指数退避
+          }
+          // 本地工具无延迟，直接重试
         }
       }
     }
@@ -234,27 +458,23 @@ export class ReActEngine {
     }
   }
 
-  private buildHistoryContext(history: Array<{role: string, content: string}>): string {
-    if (history.length === 0) return ''
-    
-    const recentHistory = history.slice(-3) // 只取最近3轮对话
-    return recentHistory
-      .map(msg => `${msg.role}: ${msg.content}`)
-      .join('\n')
-  }
-
+  /**
+   * 尝试从响应中提取最终答案
+   */
   private extractFinalAnswer(response: string): string | null {
-    // 尝试从响应中提取最终答案
-    const finalAnswerMatch = response.match(/Final Answer:\s*(.+)$/i)
+    // 尝试从响应中提取最终答案（支持多行）
+    const finalAnswerMatch = response.match(/Final Answer:\s*([\s\S]+)$/i)
     if (finalAnswerMatch && finalAnswerMatch[1]) {
       return finalAnswerMatch[1].trim()
     }
-    
-    // 兜底：如果看起来像是答案，就返回
-    if (response.length > 10 && !response.includes('Thought:') && !response.includes('Action:')) {
-      return response.trim()
+      
+    // 兜底：如果响应不包含 Action（不是工具调用），视为直接回答
+    if (response.length > 10 && !response.includes('Action:')) {
+      // 如果有 Thought 行，提取之后的内容
+      const afterThought = response.replace(/^.*?(?:Thought|思考|分析)[:：][^\n]*/im, '').trim()
+      return afterThought || response.trim()
     }
-    
+      
     return null
   }
 
@@ -265,28 +485,26 @@ export class ReActEngine {
   }
 
   /**
-   * 带超时的LLM调用
+   * 带超时的LLM调用（支持 AbortController）
    */
-  private async callLLMWithTimeout(prompt: string): Promise<string | null> {
-    this.log(`开始LLM调用，提示词长度: ${prompt.length} 字符`)
+  private async callLLMWithTimeout(messages: Array<{role: string, content: string}>): Promise<string | null> {
+    this.log(`开始LLM调用，消息数: ${messages.length}`)
     this.log(`LLM配置: provider=${this.llmConfig.provider}, model=${this.llmConfig.model}`)
-    this.log(`API URL: ${this.llmConfig.apiUrl || '使用默认'}`)
     
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        reject(new Error(`LLM调用超时 (${this.config.timeout}ms)`))
-      }, this.config.timeout)
-      
-      callLLMRaw(prompt, '', this.llmConfig)
-        .then(result => {
-          clearTimeout(timeoutId)
-          resolve(result)
-        })
-        .catch(error => {
-          clearTimeout(timeoutId)
-          reject(error)
-        })
-    })
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), this.config.timeout)
+    
+    try {
+      const result = await callLLMRawChat(messages, this.llmConfig, controller.signal)
+      clearTimeout(timeoutId)
+      return result
+    } catch (error) {
+      clearTimeout(timeoutId)
+      if ((error as Error).name === 'AbortError') {
+        throw new Error(`LLM调用超时 (${this.config.timeout}ms)`)
+      }
+      throw error
+    }
   }
 }
 

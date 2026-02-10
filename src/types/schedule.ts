@@ -1,3 +1,5 @@
+import type { PaymentOrderItem } from './message'
+
 // 交通方式
 export type TransportMode = 'flight' | 'train' | 'car' | 'ship' | 'other'
 
@@ -35,6 +37,7 @@ export interface Schedule {
     to?: string             // 出差目的地
     hotelLocation?: string  // 酒店商圈/地点
     tripApplied?: boolean   // 是否已提交出差申请
+    pendingOrders?: PaymentOrderItem[]  // 待支付订单列表
   }
 }
 

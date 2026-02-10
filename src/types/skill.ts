@@ -1,5 +1,5 @@
 import type { Schedule } from './schedule'
-import type { ResourceCardData, TransportSelectorData, AttendeeTableData, ParamConfirmData, FlightListData, HotelListData, TripApplicationData } from './message'
+import type { ResourceCardData, TransportSelectorData, AttendeeTableData, ParamConfirmData, FlightListData, HotelListData, TripApplicationData, PaymentOrderItem } from './message'
 
 // 技能元数据
 export interface SkillMeta {
@@ -27,11 +27,19 @@ export interface Scenario {
   skills: string[]
 }
 
+// 自动订单数据（用于航班/酒店自动预下单）
+export interface AutoOrderData {
+  scheduleId: string
+  orderType: 'flight' | 'hotel'
+  orderItem: PaymentOrderItem
+  message: string
+}
+
 // 技能执行结果
 export interface SkillResult {
-  type: 'action_notice' | 'resource_card' | 'transport_selector' | 'attendee_table' | 'ask_attendees' | 'param_confirm' | 'flight_list' | 'hotel_list' | 'ask_hotel_location' | 'trip_application'
+  type: 'action_notice' | 'resource_card' | 'transport_selector' | 'attendee_table' | 'ask_attendees' | 'param_confirm' | 'flight_list' | 'hotel_list' | 'ask_hotel_location' | 'trip_application' | 'auto_order'
   text?: string
-  data?: ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | FlightListData | HotelListData | TripApplicationData
+  data?: ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | FlightListData | HotelListData | TripApplicationData | AutoOrderData
 }
 
 // 技能处理函数类型

@@ -275,6 +275,7 @@ export const toolRegistry = new ToolRegistry()
 // 不再使用硬编码的工具定义
 
 import { skillStore } from './skills/skillStore'
+import { registerCoreTools } from '../../tools'
 
 /**
  * 从 SKILL.md 动态注册 Skill 工具到 toolRegistry
@@ -287,6 +288,8 @@ function registerSkillTools(): void {
   
   // 获取所有 Skill 元数据
   const allMetadata = skillStore.getAllMetadata()
+  
+  console.log(`[ToolRegistry] 找到 ${allMetadata.length} 个 Skill: ${allMetadata.map(m => m.name).join(', ')}`)
   
   // 为每个 Skill 创建工具
   for (const metadata of allMetadata) {
@@ -340,6 +343,10 @@ function registerSkillTools(): void {
   console.log(`[ToolRegistry] Skill 工具注册完成，共 ${allMetadata.length} 个`)
 }
 
+// 应用启动时自动注册 Skill 工具和核心工具
+registerSkillTools()
+registerCoreTools()
+
 /**
  * 从 Skill 的 instruction 中提取参数定义
  */
@@ -387,7 +394,7 @@ function extractParametersFromSkill(skillName: string): ToolParameter[] {
               name: name.trim(),
               type: normalizeParamType(type.trim()),
               description: description.trim(),
-              required: required.trim() === '是'
+              required: false  // Skill 工具参数统一设为非必填，UI 表单负责校验
             })
           }
         }
@@ -418,8 +425,7 @@ function normalizeParamType(type: string): 'string' | 'number' | 'boolean' | 'ar
   return 'string'
 }
 
-// 自动注册 Skill 工具
-registerSkillTools()
+// 自动注册 Skill 工具（已在上方统一调用，勿重复）
 
 // ==================== 工具执行辅助函数 ====================
 

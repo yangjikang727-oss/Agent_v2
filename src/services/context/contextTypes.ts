@@ -163,6 +163,14 @@ export interface ContextSnapshot {
 
 // ==================== 完整上下文 ====================
 
+/** 参数收集状态（用于多轮对话） */
+export interface CollectingState {
+  intent: 'meeting' | 'trip' | null
+  collectedParams: Record<string, any>
+  missingFields: string[]
+  originalQuery: string
+}
+
 /** 完整会话上下文 */
 export interface SessionContext {
   /** 会话状态 */
@@ -175,6 +183,10 @@ export interface SessionContext {
   summary?: ConversationSummary
   /** 压缩配置 */
   compressionConfig: CompressionConfig
+  /** 扩展元数据（用于存储多轮对话状态等） */
+  meta?: {
+    collectingState?: CollectingState
+  }
 }
 
 /** 上下文管理器配置 */

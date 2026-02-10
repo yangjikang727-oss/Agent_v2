@@ -14,7 +14,8 @@
 // ==================== 核心服务导出 ====================
 export { 
   callLLM, 
-  callLLMRaw, 
+  callLLMRaw,
+  callLLMRawChat,
   callGeminiLegacy,
   type LLMConfig, 
   type LLMProvider 

@@ -151,8 +151,8 @@ export async function generateTripTasksAction(
       console.log('[Action] apply_trip 任务已完成')
     }
     
-    // 获取可自动执行的任务
-    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport']
+    // 获取可自动执行的任务（航班 + 酒店都自动预下单）
+    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport', 'check_hotel']
     const autoTasks = newTasks.filter(task => AUTO_EXECUTABLE_SKILLS.includes(task.skill))
     
     if (autoTasks.length > 0) {
@@ -208,7 +208,7 @@ export async function askAutoExecuteAction(
     })
     
     messageStore.addSystemMessage(
-      '已生成交通安排任务,需要我现在自动帮你跑一遍推荐吗?(回复“是”或“否”)'
+      '已生成交通安排和酒店预订任务，需要我现在自动帮你跑一遍推荐吗？(回复“是”或“否”)'
     )
     
     console.log('[Action] ask_auto_execute: 已询问用户')

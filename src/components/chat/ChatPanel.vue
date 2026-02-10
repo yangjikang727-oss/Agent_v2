@@ -14,6 +14,7 @@ import FlightList from './FlightList.vue'
 import HotelList from './HotelList.vue'
 import TripApplication from './TripApplication.vue'
 import NotifyOption from './NotifyOption.vue'
+import PaymentOrderList from './PaymentOrderList.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -120,6 +121,10 @@ function isTripApplication(msg: Message): msg is Message & { data: TripApplicati
 
 function isNotifyOption(msg: Message): msg is Message & { data: NotifyOptionData } {
   return msg.type === 'notify_option' && msg.data !== null && 'attendees' in (msg.data as object)
+}
+
+function isPaymentOrder(msg: Message): msg is Message & { data: import('../../types').PaymentOrderData } {
+  return msg.type === 'payment_order' && msg.data !== null && 'orders' in (msg.data as object)
 }
 
 defineExpose({
@@ -267,6 +272,12 @@ defineExpose({
             :data="msg.data"
             @select="(opt) => emit('selectNotifyOption', opt, msg.data.scheduleId, msg.id)"
             @skip="() => emit('skipNotify', msg.data.scheduleId, msg.id)"
+          />
+
+          <!-- Payment Order List -->
+          <PaymentOrderList
+            v-if="isPaymentOrder(msg)"
+            :data="msg.data"
           />
         </ChatMessage>
       </TransitionGroup>

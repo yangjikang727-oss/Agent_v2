@@ -30,6 +30,7 @@ class Logger {
   private pendingLogs: LogEntry[] = []
   private maxPendingSize = 50
   private flushInterval = 5000 // 5秒刷新一次
+  private lastTimestamp = 0 // 用于保证时间戳单调递增，避免主键冲突
 
   constructor() {
     this.sessionId = this.generateSessionId()
@@ -131,10 +132,22 @@ class Logger {
   }
 
   /**
+   * 生成单调递增的唯一时间戳，避免同毫秒内主键冲突
+   */
+  private getUniqueTimestamp(): number {
+    let ts = Date.now()
+    if (ts <= this.lastTimestamp) {
+      ts = this.lastTimestamp + 1
+    }
+    this.lastTimestamp = ts
+    return ts
+  }
+
+  /**
    * 记录日志
    */
   private log(level: LogLevel, module: string, message: string, data?: any, error?: Error) {
-    const timestamp = Date.now()
+    const timestamp = this.getUniqueTimestamp()
     const datetime = new Date(timestamp).toISOString()
 
     const entry: LogEntry = {

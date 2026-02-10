@@ -56,12 +56,17 @@ export const resourceCheckerTool: Tool = {
         )
       }
       
-      // 检查可用性（这里简化处理，实际应该查询预订系统）
-      const availableResources = filteredResources.map(resource => ({
-        ...resource,
-        isAvailable: Math.random() > 0.3, // 70%概率可用
-        bookingStatus: Math.random() > 0.3 ? 'available' : 'occupied'
-      }))
+      // 检查可用性（基于确定性逻辑：根据时间段哈希判断可用性，确保同一查询结果一致）
+      const availableResources = filteredResources.map(resource => {
+        // 使用资源ID + 日期 + 时间段生成确定性可用状态
+        const hash = simpleHash(`${resource.id}-${date}-${startTime}-${endTime}`)
+        const isAvailable = hash % 10 >= 3 // 约 70% 可用，但结果确定性
+        return {
+          ...resource,
+          isAvailable,
+          bookingStatus: isAvailable ? 'available' : 'occupied'
+        }
+      })
       
       return {
         success: true,
@@ -146,6 +151,19 @@ export const intentClassifierTool: Tool = {
 }
 
 // ==================== 辅助函数 ====================
+
+/**
+ * 简单字符串哈希（确定性，同一输入始终返回同一结果）
+ */
+function simpleHash(str: string): number {
+  let hash = 0
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i)
+    hash = ((hash << 5) - hash) + char
+    hash = hash & hash // Convert to 32bit integer
+  }
+  return Math.abs(hash)
+}
 
 /**
  * 获取模拟资源数据

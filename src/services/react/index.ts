@@ -75,28 +75,41 @@ export { parseSkillMd, loadAllSkillFiles } from './skills/skillLoader'
 
 // ==================== ReAct 模式初始化 ====================
 
-import { createReActEngine } from './reactEngine'
+import { createReActEngine, type ReActEngine } from './reactEngine'
 import type { LLMConfig } from '../core/llmCore'
-import { skillStore } from './skills/skillStore'
+
+/** 缓存的引擎实例，避免每次调用都重新创建 */
+let cachedEngine: ReActEngine | null = null
+let cachedConfigKey = ''
+
+/** 根据 LLM 配置生成缓存 key */
+function configToKey(config: LLMConfig): string {
+  return `${config.provider}|${config.model}|${config.apiUrl}|${config.apiKey?.slice(-6) || ''}`
+}
 
 /**
  * 初始化 ReAct 模式
  * @param config LLM配置
  * @returns ReAct引擎实例
  */
-export function initializeReAct(config: LLMConfig) {
-  // 初始化 Skill 系统（加载所有 SKILL.md）
-  skillStore.loadAllSkills()
+export function initializeReAct(config: LLMConfig): ReActEngine {
+  // Skill 工具已在 toolRegistry.ts 模块加载时自动注册，无需重复调用
   
-  // 创建 ReAct 引擎
-  const engine = createReActEngine(config)
+  const key = configToKey(config)
+  if (cachedEngine && cachedConfigKey === key) {
+    console.log('[ReAct] 复用已有引擎实例')
+    return cachedEngine
+  }
   
-  console.log('[ReAct] 初始化完成（Skill 系统已加载）')
-  return engine
+  cachedEngine = createReActEngine(config)
+  cachedConfigKey = key
+  console.log('[ReAct] 初始化完成（新引擎实例）')
+  return cachedEngine
 }
 
 /**
  * 使用 ReAct 模式处理用户查询
+ * 复用引擎实例，配置变更时自动重建
  */
 export async function processWithReAct(
   query: string,
@@ -105,7 +118,6 @@ export async function processWithReAct(
     currentDate: string
     scheduleStore: any
     taskStore: any
-    conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
   },
   config: LLMConfig
 ) {
@@ -114,12 +126,11 @@ export async function processWithReAct(
     provider: config.provider,
     model: config.model,
     hasApiKey: !!config.apiKey,
-    apiUrl: config.apiUrl,
-    historyLength: context.conversationHistory?.length || 0
+    apiUrl: config.apiUrl
   })
   
   try {
-    const engine = createReActEngine(config)
+    const engine = initializeReAct(config)  // 复用缓存引擎
     const result = await engine.processQuery(query, context)
     console.log('[ReAct] 处理完成，结果:', result)
     return result
