@@ -42,9 +42,7 @@ import StatsBar from './components/dashboard/StatsBar.vue'
 import TaskStack from './components/dashboard/TaskStack.vue'
 import DetailModal from './components/modals/DetailModal.vue'
 import ConfigModal from './components/modals/ConfigModal.vue'
-import CreateMeetingModal from './components/modals/CreateMeetingModal.vue'
 import LogViewerModal from './components/modals/LogViewerModal.vue'
-import TripApplication from './components/chat/TripApplication.vue'
 import { TripFormManager } from './services/react/tripFormManager'
 
 // ==================== 工具函数 ====================
@@ -84,22 +82,6 @@ const showDetailModal = ref(false)
 const selectedEvent = ref<Schedule | null>(null)
 const showConfigModal = ref(false)
 const showLogViewer = ref(false)
-const showCreateMeetingModal = ref(false)
-const createMeetingData = ref<Record<string, any>>({})
-const showTripApplication = ref(false)  // 出差申请表单显示控制
-const currentTripFormData = ref<import('./types').TripApplicationData>({
-  scheduleId: '',
-  taskId: '',
-  startDate: '',
-  startTime: '',
-  endDate: '',
-  endTime: '',
-  from: '',
-  to: '',
-  transport: '',
-  reason: '',
-  status: 'draft'
-})
 const showProcessing = ref(false)
 const currentActionType = ref('')
 
@@ -277,69 +259,17 @@ async function resolveConflictAndCreate(ctx: {
     return
   }
 
-  // 计算当前时间（分钟），只推荐当前时间之后的时段
-  const now = new Date()
-  const todayStr = now.toISOString().split('T')[0]
-  const nowMinutes = now.getHours() * 60 + now.getMinutes()
-  // 仅当日程安排在今天时，才限制最小起始时间
-  const minStartMin = ctx.date === todayStr ? nowMinutes : undefined
-
-  // 第一层：双向就近安排 → 展示推荐，等待用户确认
-  const nearest = scheduleStore.findNearestAvailableSlot(ctx.date, ctx.startTime, duration, undefined, minStartMin)
-  if (nearest) {
-    logger.info('App/Conflict', `就近推荐: ${nearest.start}-${nearest.end}，等待用户确认`)
-    // 同时获取当天所有空闲时段，用户拒绝推荐后可展示
-    const todaySlots = scheduleStore.findAvailableSlots(ctx.date, duration, undefined, minStartMin)
-    messageStore.addDataMessage('conflict_resolution', '', {
-      conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
-      nearestSlot: { date: ctx.date, startTime: nearest.start, endTime: nearest.end },
-      availableSlots: todaySlots.map(s => ({ date: ctx.date, startTime: s.start, endTime: s.end })),
-      originalCtx: { ...ctx },
-      isNextDay: false,
-      selectedIndex: null,
-      userAction: 'pending'
-    } as ConflictResolutionData)
-    return
-  }
-
-  // 第二层：当天空闲时段推荐
-  const todaySlots = scheduleStore.findAvailableSlots(ctx.date, duration, undefined, minStartMin)
-  if (todaySlots.length > 0) {
-    logger.info('App/Conflict', `当天找到 ${todaySlots.length} 个空闲时段`)
-    messageStore.addDataMessage('conflict_resolution', '', {
-      conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
-      availableSlots: todaySlots.map(s => ({ date: ctx.date, startTime: s.start, endTime: s.end })),
-      originalCtx: { ...ctx },
-      isNextDay: false,
-      selectedIndex: null,
-      userAction: 'pending'
-    } as ConflictResolutionData)
-    return
-  }
-
-  // 第三层：下一个工作日推荐
-  const nextDay = scheduleStore.getNextWorkday(ctx.date)
-  const nextDaySlots = scheduleStore.findAvailableSlots(nextDay, duration)
-  if (nextDaySlots.length > 0) {
-    logger.info('App/Conflict', `下一工作日 ${nextDay} 找到 ${nextDaySlots.length} 个空闲时段`)
-    messageStore.addDataMessage('conflict_resolution', '', {
-      conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
-      availableSlots: nextDaySlots.map(s => ({ date: nextDay, startTime: s.start, endTime: s.end })),
-      originalCtx: { ...ctx },
-      isNextDay: true,
-      selectedIndex: null,
-      userAction: 'pending'
-    } as ConflictResolutionData)
-    return
-  }
-
-  // 兜底：两个工作日均无可用时段
-  messageStore.addSystemMessage(
-    `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
-      <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
-      <div class="text-sm text-gray-700">与「<b>${conflict.content}</b>」存在冲突，且今明两个工作日均无法容纳该时长的日程，请手动选择其他日期。</div>
-    </div>`
-  )
+  // ★ 展示目标选择阶段：让用户选择调整原日程还是新日程
+  messageStore.addDataMessage('conflict_resolution', '', {
+    conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
+    availableSlots: [],
+    originalCtx: { ...ctx },
+    isNextDay: false,
+    selectedIndex: null,
+    userAction: 'pending',
+    adjustTarget: 'pending',
+    existingScheduleId: conflict.id
+  } as ConflictResolutionData)
 }
 
 // 处理用户输入（ReAct模式）
@@ -438,37 +368,56 @@ async function processInputWithReAct(text: string) {
         if (createMeetingStep && createMeetingStep.actionInput) {
           logger.info('App/ReAct', '→ 触发会议创建表单')
           logger.debug('App/ReAct', '表单数据:', createMeetingStep.actionInput.formData)
-          createMeetingData.value = createMeetingStep.actionInput.formData || {}
-          showCreateMeetingModal.value = true
+          const formData = createMeetingStep.actionInput.formData || {}
+          messageStore.addDataMessage('create_meeting', '', {
+            title: formData.title || '',
+            startTime: formData.startTime || '',
+            endTime: formData.endTime || '',
+            location: formData.location || '',
+            roomType: formData.roomType || '',
+            attendees: formData.attendees || [],
+            remarks: formData.remarks || '',
+            status: 'draft'
+          } as import('./types').CreateMeetingData)
           hasModalAction = true
         } else if (createTripStep && createTripStep.actionInput) {
           logger.info('App/ReAct', '→ 触发出差申请表单')
           logger.debug('App/ReAct', '表单数据:', createTripStep.actionInput.formData)
-          currentTripFormData.value = {
-            ...createTripStep.actionInput.formData,
-            id: createTripStep.actionInput.taskId || `TRIP-${Date.now()}`,
+          const tripFormData = createTripStep.actionInput.formData || {}
+          messageStore.addDataMessage('trip_application', '', {
+            ...tripFormData,
+            scheduleId: '',
+            taskId: createTripStep.actionInput.taskId || `TRIP-${Date.now()}`,
             status: 'draft'
-          }
-          showTripApplication.value = true
+          } as import('./types').TripApplicationData)
           hasModalAction = true
         }
         
-        // 检查是否有修改日程的动作（复用传统模式的日程列表选择流程）
+        // 检查是否有修改日程的动作（智能匹配确认流程）
         const editScheduleStep = result.steps.find(step => 
-          step.action === 'open_schedule_list'
+          step.action === 'edit_schedule' || step.action === 'open_schedule_list'
         )
         if (editScheduleStep) {
-          logger.info('App/ReAct', '→ 触发修改日程列表')
-          const today: string = scheduleStore.systemCurrentDate || new Date().toISOString().split('T')[0] || ''
-          const futureSchedules = scheduleStore.schedules
-            .filter(s => s.date >= today)
-            .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime))
-          
-          if (futureSchedules.length === 0) {
-            messageStore.addSystemMessage('暂无未来日程可修改。')
-          } else {
-            messageStore.addDataMessage('schedule_list', '请选择要修改的日程：', { schedules: futureSchedules } as ScheduleListData)
-          }
+          logger.info('App/ReAct', '→ 触发修改日程确认')
+          const editParams = editScheduleStep.actionInput || {}
+          showEditConfirmCard({
+            date: editParams.date,
+            keyword: editParams.keyword,
+            type: editParams.type
+          })
+          hasModalAction = true
+        }
+        
+        // 检查是否有取消日程的动作
+        const cancelStep = result.steps.find(step => step.action === 'cancel_schedule')
+        if (cancelStep) {
+          logger.info('App/ReAct', '→ 触发取消日程确认')
+          const cancelParams = cancelStep.actionInput || {}
+          showCancelConfirmCard({
+            date: cancelParams.date,
+            keyword: cancelParams.keyword,
+            type: cancelParams.type
+          })
           hasModalAction = true
         }
       }
@@ -1762,90 +1711,162 @@ function handleConfirmHotel(hotelId: string, scheduleId: string, msgId: number) 
 }
 
 /**
- * 处理出差申请提交
+ * 处理出差申请提交（统一处理器：传统模式 + ReAct模式）
  */
 async function handleSubmitTripApplication(data: import('./types').TripApplicationData, msgId: number) {
-  // 更新消息状态为已提交
+  logger.info('App/Trip', '========== 出差申请提交 ==========')
+  logger.debug('App/Trip', '表单数据:', data)
+  
+  // 锁定表单（标记为已提交）
   messageStore.updateMessage(msgId, {
     data: { ...data, status: 'submitted' }
   })
+  
+  let scheduleId = data.scheduleId
+  
+  // 如果没有现有日程，使用 TripFormManager 创建（ReAct 路径）
+  if (!scheduleId || !scheduleStore.getSchedule(scheduleId)) {
+    logger.info('App/Trip', '→ 无现有日程，调用 TripFormManager 创建...')
+    const schedule = TripFormManager.createScheduleFromForm({
+      startDate: data.startDate,
+      startTime: data.startTime,
+      endDate: data.endDate,
+      endTime: data.endTime,
+      from: data.from,
+      to: data.to,
+      transport: data.transport as import('./types').TransportMode,
+      reason: data.reason
+    }, scheduleId || `TRIP-${Date.now()}`)
+    scheduleId = schedule.id
+    logger.info('App/Trip', `✓ 日程对象已创建: ${schedule.id}`)
+    
+    // 冲突检测 → 智能冲突解决
+    const conflict = scheduleStore.checkConflict(schedule.date, schedule.startTime, schedule.endTime)
+    if (conflict) {
+      logger.warn('App/Trip', `✗ 时间冲突: ${conflict.content}，启动智能冲突解决`)
+      await resolveConflictAndCreate({
+        date: schedule.date,
+        startTime: schedule.startTime,
+        endTime: schedule.endTime,
+        endDate: schedule.endDate,
+        content: schedule.content,
+        scenarioCode: 'TRIP',
+        location: schedule.location,
+        transport: data.transport,
+        from: data.from,
+        to: data.to
+      })
+      return
+    }
+    
+    const tripSuccess = scheduleStore.addSchedule(schedule)
+    if (!tripSuccess) {
+      logger.error('App/Trip', '✗ addSchedule 返回失败')
+      messageStore.addSystemMessage('❌ 无法创建出差日程：该时段已有日程。')
+      return
+    }
+    logger.info('App/Trip', '✓ 日程已添加到 store')
+    
+    // 切换日期视图到出差日期，并滚动时间轴
+    if (schedule.date !== scheduleStore.currentDate) {
+      scheduleStore.setDate(schedule.date)
+    }
+    timelineRef.value?.scrollToTime(schedule.startTime)
+  } else {
+    // 现有日程存在（传统路径），同步更新时间信息
+    logger.info('App/Trip', `→ 更新已有日程: ${scheduleId}`)
+    const existingSchedule = scheduleStore.getSchedule(scheduleId)
+    if (existingSchedule) {
+      const transportMap: Record<string, import('./types').TransportMode> = {
+        'flight': 'flight',
+        'train': 'train',
+        'car': 'car',
+        'ship': 'ship',
+        'other': 'other'
+      }
+      scheduleStore.updateSchedule(scheduleId, {
+        date: data.startDate,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        endDate: data.endDate,
+        meta: {
+          ...(existingSchedule.meta || {}),
+          tripApplied: true,
+          from: data.from,
+          to: data.to,
+          transport: transportMap[data.transport] || undefined
+        }
+      })
+    }
+  }
   
   // 模拟审批过程（默认通过）
   await new Promise(r => setTimeout(r, 1000))
   
   // 更新为已通过
   messageStore.updateMessage(msgId, {
-    data: { ...data, status: 'approved' }
+    data: { ...data, scheduleId, status: 'approved' }
   })
-  
-  // 更新日程，同步出差申请的时间范围
-  const schedule = scheduleStore.getSchedule(data.scheduleId)
-  if (schedule) {
-    const transportMap: Record<string, import('./types').TransportMode> = {
-      'flight': 'flight',
-      'train': 'train',
-      'car': 'car',
-      'ship': 'ship',
-      'other': 'other'
-    }
-    // 同步更新日程的时间信息
-    scheduleStore.updateSchedule(data.scheduleId, {
-      date: data.startDate,           // 开始日期
-      startTime: data.startTime,      // 开始时间
-      endTime: data.endTime,          // 结束时间
-      endDate: data.endDate,          // 返程日期（跨天行程）
-      meta: {
-        ...(schedule.meta || {}),
-        tripApplied: true,
-        from: data.from,
-        to: data.to,
-        transport: transportMap[data.transport] || undefined
-      }
-    })
-  }
   
   // 完成任务
   if (data.taskId) {
     taskStore.completeTask(data.taskId)
   }
   
-  messageStore.addSystemMessage(`✅ 出差申请已通过！正在为您推荐航班和酒店...`)
-  
-  // 后续流程：推荐航班
-  await new Promise(r => setTimeout(r, 500))
+  if (useReActMode.value) {
+    // === ReAct 模式：走 action 链（生成任务 → 询问自动推荐） ===
+    messageStore.addSystemMessage(`✅ 出差申请已通过!`)
+    
+    const { executeAction } = await import('./services/react/skills/actionHandlers')
+    const actionContext = { scheduleStore, taskStore, messageStore, configStore, brain }
+    
+    // 执行 generate_trip_task_list → 自动链到 ask_auto_execute
+    let result = await executeAction('generate_trip_task_list', {
+      scheduleId,
+      startDate: data.startDate
+    }, actionContext)
+    
+    // 处理链式 action
+    while (result.success && result.nextAction) {
+      result = await executeAction(result.nextAction, result.nextActionInput || {}, actionContext)
+    }
+  } else {
+    // === 传统模式：直接展示航班列表 ===
+    messageStore.addSystemMessage(`✅ 出差申请已通过！正在为您推荐航班和酒店...`)
+    
+    await new Promise(r => setTimeout(r, 500))
 
-  if (data.transport === 'flight' && data.from && data.to) {
-    // 生成航班列表
-    const { generateFlightList } = await import('./services/traditional/skillRegistry')
-    const updatedSchedule = scheduleStore.getSchedule(data.scheduleId)
-    if (updatedSchedule) {
-      const flightResult = generateFlightList(updatedSchedule, data.from, data.to)
-      if (flightResult.type === 'flight_list' && flightResult.data) {
-        messageStore.addSystemMessage(`✈️ 以下是根据您的行程（${data.from} → ${data.to}）为您推荐的航班，请选择：`)
-        messageStore.addDataMessage('flight_list', '', {
-          ...flightResult.data,
-          scheduleId: data.scheduleId
-        } as import('./types').FlightListData)
+    if (data.transport === 'flight' && data.from && data.to) {
+      const { generateFlightList } = await import('./services/traditional/skillRegistry')
+      const updatedSchedule = scheduleStore.getSchedule(scheduleId)
+      if (updatedSchedule) {
+        const flightResult = generateFlightList(updatedSchedule, data.from, data.to)
+        if (flightResult.type === 'flight_list' && flightResult.data) {
+          messageStore.addSystemMessage(`✈️ 以下是根据您的行程（${data.from} → ${data.to}）为您推荐的航班，请选择：`)
+          messageStore.addDataMessage('flight_list', '', {
+            ...flightResult.data,
+            scheduleId
+          } as import('./types').FlightListData)
+        }
+      }
+    } else if (data.transport === 'train') {
+      messageStore.addSystemMessage(`🚄 已为您查询 ${data.from} → ${data.to} 的高铁票，请自行在 12306 预订。`)
+
+      await new Promise(r => setTimeout(r, 500))
+      const hotelTask = taskStore.pendingTasks.find(
+        t => t.scheduleId === scheduleId && t.skill === 'check_hotel'
+      )
+      if (hotelTask) {
+        messageStore.addSystemMessage(`🏨 请问您希望住在${data.to}的哪个商圈或地点？`)
+        brain.setMode('WAIT_HOTEL_LOCATION')
+        brain.state.value.draft = { scheduleId }
+        brain.state.value.statusText = '等待输入酒店商圈...'
+        brain.setPendingTask(hotelTask)
       }
     }
-  } else if (data.transport === 'train') {
-    // 火车票提示
-    messageStore.addSystemMessage(`🚄 已为您查询 ${data.from} → ${data.to} 的高铁票，请自行在 12306 预订。`)
-
-    // 火车票场景：不需要确认，直接询问酒店商圈
-    await new Promise(r => setTimeout(r, 500))
-    const hotelTask = taskStore.pendingTasks.find(
-      t => t.scheduleId === data.scheduleId && t.skill === 'check_hotel'
-    )
-    if (hotelTask) {
-      messageStore.addSystemMessage(`🏨 请问您希望住在${data.to}的哪个商圈或地点？`)
-      brain.setMode('WAIT_HOTEL_LOCATION')
-      brain.state.value.draft = { scheduleId: data.scheduleId }
-      brain.state.value.statusText = '等待输入酒店商圈...'
-      brain.setPendingTask(hotelTask)
-    }
   }
-  // 飞机场景：酒店询问在确认航班后触发（handleConfirmFlight 中处理）
+  
+  logger.info('App/Trip', '========== 出差申请流程完成 ==========')
 }
 
 function handleRemoveAttendee(msgId: number, uid: string) {
@@ -2005,15 +2026,19 @@ async function handleConflictSlotSelect(slotIndex: number, data: ConflictResolut
     (msg.data as ConflictResolutionData).selectedIndex = slotIndex
   }
 
-  // 用所选时段的 date/startTime/endTime 更新原始上下文并创建日程
-  const ctx = {
-    ...data.originalCtx,
-    date: slot.date,
-    startTime: slot.startTime,
-    endTime: slot.endTime
-  } as Parameters<typeof createSchedule>[0]
-
-  await createSchedule(ctx)
+  if (data.adjustTarget === 'existing' && data.existingScheduleId) {
+    // ★ 调整原日程：将原日程移到选定时段，然后创建新日程
+    await moveExistingAndCreateNew(data.existingScheduleId, slot, data.originalCtx)
+  } else {
+    // 调整新日程（默认行为）：用所选时段创建新日程
+    const ctx = {
+      ...data.originalCtx,
+      date: slot.date,
+      startTime: slot.startTime,
+      endTime: slot.endTime
+    } as Parameters<typeof createSchedule>[0]
+    await createSchedule(ctx)
+  }
 }
 
 /**
@@ -2029,13 +2054,54 @@ async function handleConflictAcceptNearest(data: ConflictResolutionData, msgId: 
   }
 
   const slot = data.nearestSlot
-  const ctx = {
-    ...data.originalCtx,
-    date: slot.date,
-    startTime: slot.startTime,
-    endTime: slot.endTime
-  } as Parameters<typeof createSchedule>[0]
 
+  if (data.adjustTarget === 'existing' && data.existingScheduleId) {
+    // ★ 调整原日程：将原日程移到推荐时段，然后创建新日程
+    await moveExistingAndCreateNew(data.existingScheduleId, slot, data.originalCtx)
+  } else {
+    // 调整新日程（默认行为）
+    const ctx = {
+      ...data.originalCtx,
+      date: slot.date,
+      startTime: slot.startTime,
+      endTime: slot.endTime
+    } as Parameters<typeof createSchedule>[0]
+    await createSchedule(ctx)
+  }
+}
+
+/**
+ * 辅助函数：移动原日程到新时段，并在原时段创建新日程
+ */
+async function moveExistingAndCreateNew(
+  existingId: string,
+  targetSlot: { date: string; startTime: string; endTime: string },
+  newScheduleCtx: Record<string, any>
+) {
+  const existingSchedule = scheduleStore.getSchedule(existingId)
+  if (!existingSchedule) {
+    messageStore.addSystemMessage('❌ 原日程已不存在，无法调整。')
+    return
+  }
+
+  // 1. 移动原日程到新时段
+  logger.info('App/Conflict', `移动原日程「${existingSchedule.content}」至 ${targetSlot.date} ${targetSlot.startTime}-${targetSlot.endTime}`)
+  scheduleStore.updateSchedule(existingId, {
+    date: targetSlot.date,
+    startTime: targetSlot.startTime,
+    endTime: targetSlot.endTime
+  })
+
+  messageStore.addSystemMessage(
+    `<div class="bg-blue-50 border-l-4 border-blue-400 p-3 rounded">
+      <div class="text-sm text-blue-700"><i class="fa-solid fa-arrows-rotate mr-1"></i>已将原日程「<b>${existingSchedule.content}</b>」调整至 ${targetSlot.startTime} - ${targetSlot.endTime}</div>
+    </div>`
+  )
+
+  // 2. 在原时段创建新日程
+  const ctx = {
+    ...newScheduleCtx
+  } as Parameters<typeof createSchedule>[0]
   await createSchedule(ctx)
 }
 
@@ -2062,6 +2128,144 @@ function handleConflictCancel(data: ConflictResolutionData, msgId: number) {
       <div class="text-sm text-gray-600"><i class="fa-solid fa-ban mr-1"></i>已取消创建「${data.originalCtx.content || '日程'}」</div>
     </div>`
   )
+}
+
+/**
+ * 冲突解决：用户选择调整目标（原日程 or 新日程）
+ * 根据选择的目标，执行三层递进策略推荐可用时段
+ */
+function handleConflictAdjustTarget(target: 'existing' | 'new', data: ConflictResolutionData, msgId: number) {
+  const msg = messageStore.getMessage(msgId)
+  if (!msg || !msg.data) return
+  const conflictData = msg.data as ConflictResolutionData
+
+  // 记录用户选择
+  conflictData.adjustTarget = target
+
+  const ctx = data.originalCtx
+  const now = new Date()
+  const todayStr = now.toISOString().split('T')[0]
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+
+  if (target === 'new') {
+    // ========== 调整新日程：沿用原有三层递进策略 ==========
+    const duration = timeToMinutes(ctx.endTime) - timeToMinutes(ctx.startTime)
+    const targetDate = ctx.date
+    const minStartMin = targetDate === todayStr ? nowMinutes : undefined
+
+    // 第一层：双向就近安排
+    const nearest = scheduleStore.findNearestAvailableSlot(targetDate, ctx.startTime, duration, undefined, minStartMin)
+    if (nearest) {
+      logger.info('App/Conflict', `[调整新日程] 就近推荐: ${nearest.start}-${nearest.end}`)
+      const todaySlots = scheduleStore.findAvailableSlots(targetDate, duration, undefined, minStartMin)
+      conflictData.nearestSlot = { date: targetDate, startTime: nearest.start, endTime: nearest.end }
+      conflictData.availableSlots = todaySlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
+      conflictData.isNextDay = false
+      return
+    }
+
+    // 第二层：当天空闲时段推荐
+    const todaySlots = scheduleStore.findAvailableSlots(targetDate, duration, undefined, minStartMin)
+    if (todaySlots.length > 0) {
+      logger.info('App/Conflict', `[调整新日程] 当天找到 ${todaySlots.length} 个空闲时段`)
+      conflictData.availableSlots = todaySlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
+      conflictData.isNextDay = false
+      return
+    }
+
+    // 第三层：下一个工作日推荐
+    const nextDay = scheduleStore.getNextWorkday(targetDate)
+    const nextDaySlots = scheduleStore.findAvailableSlots(nextDay, duration)
+    if (nextDaySlots.length > 0) {
+      logger.info('App/Conflict', `[调整新日程] 下一工作日 ${nextDay} 找到 ${nextDaySlots.length} 个空闲时段`)
+      conflictData.availableSlots = nextDaySlots.map(s => ({ date: nextDay, startTime: s.start, endTime: s.end }))
+      conflictData.isNextDay = true
+      return
+    }
+
+    // 兜底：无可用时段
+    conflictData.userAction = 'cancelled'
+    messageStore.addSystemMessage(
+      `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+        <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
+        <div class="text-sm text-gray-700">今明两个工作日均无法容纳该时长的日程，请手动选择其他日期。</div>
+      </div>`
+    )
+  } else {
+    // ========== 调整原日程：为冲突的已有日程查找可用时段 ==========
+    const existingSchedule = data.existingScheduleId ? scheduleStore.getSchedule(data.existingScheduleId) : null
+    if (!existingSchedule) {
+      conflictData.userAction = 'cancelled'
+      messageStore.addSystemMessage('❌ 未找到原日程，无法调整。')
+      return
+    }
+
+    const existingDuration = timeToMinutes(existingSchedule.endTime) - timeToMinutes(existingSchedule.startTime)
+    const targetDate = existingSchedule.date
+    const minStartMin = targetDate === todayStr ? nowMinutes : undefined
+
+    // 查找可用时段时，需排除原日程自身（因为原日程将被移走）
+    // 同时需要排除新日程打算占用的时段
+    const newStart = timeToMinutes(ctx.startTime)
+    const newEnd = timeToMinutes(ctx.endTime)
+
+    // ★ 锚点优先工作时间：原日程若在工作时间内(08:30-12:00/13:30-17:30)则保持，否则回退到09:00
+    const existingStartMin = timeToMinutes(existingSchedule.startTime)
+    const isInWorkingHours = (existingStartMin >= 510 && existingStartMin < 720) || (existingStartMin >= 810 && existingStartMin < 1050)
+    const anchorTime = isInWorkingHours ? existingSchedule.startTime : '09:00'
+
+    // 第一层：双向就近安排（排除原日程自身）
+    const nearest = scheduleStore.findNearestAvailableSlot(
+      targetDate, anchorTime, existingDuration, existingSchedule.id, minStartMin
+    )
+    // 过滤掉与新日程冲突的推荐
+    const nearestValid = nearest && !(timeToMinutes(nearest.start) < newEnd && timeToMinutes(nearest.end) > newStart && targetDate === ctx.date)
+      ? nearest : null
+
+    if (nearestValid) {
+      logger.info('App/Conflict', `[调整原日程] 就近推荐: ${nearestValid.start}-${nearestValid.end}`)
+      const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin)
+      // 过滤掉与新日程时段冲突的时段
+      const filteredSlots = targetDate === ctx.date
+        ? allSlots.filter(s => !(timeToMinutes(s.start) < newEnd && timeToMinutes(s.end) > newStart))
+        : allSlots
+      conflictData.nearestSlot = { date: targetDate, startTime: nearestValid.start, endTime: nearestValid.end }
+      conflictData.availableSlots = filteredSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
+      conflictData.isNextDay = false
+      return
+    }
+
+    // 第二层：当天空闲时段推荐
+    const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin)
+    const filteredSlots = targetDate === ctx.date
+      ? allSlots.filter(s => !(timeToMinutes(s.start) < newEnd && timeToMinutes(s.end) > newStart))
+      : allSlots
+    if (filteredSlots.length > 0) {
+      logger.info('App/Conflict', `[调整原日程] 当天找到 ${filteredSlots.length} 个空闲时段`)
+      conflictData.availableSlots = filteredSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
+      conflictData.isNextDay = false
+      return
+    }
+
+    // 第三层：下一个工作日推荐
+    const nextDay = scheduleStore.getNextWorkday(targetDate)
+    const nextDaySlots = scheduleStore.findAvailableSlots(nextDay, existingDuration, existingSchedule.id)
+    if (nextDaySlots.length > 0) {
+      logger.info('App/Conflict', `[调整原日程] 下一工作日 ${nextDay} 找到 ${nextDaySlots.length} 个空闲时段`)
+      conflictData.availableSlots = nextDaySlots.map(s => ({ date: nextDay, startTime: s.start, endTime: s.end }))
+      conflictData.isNextDay = true
+      return
+    }
+
+    // 兜底：无可用时段
+    conflictData.userAction = 'cancelled'
+    messageStore.addSystemMessage(
+      `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+        <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
+        <div class="text-sm text-gray-700">原日程「${existingSchedule.content}」今明两个工作日均无法容纳该时长，请手动调整。</div>
+      </div>`
+    )
+  }
 }
 
 /**
@@ -2224,7 +2428,6 @@ async function handleConflictCustomDate(targetDate: string, data: ConflictResolu
   }
 
   const ctx = data.originalCtx
-  const duration = timeToMinutes(ctx.endTime) - timeToMinutes(ctx.startTime)
 
   // 格式化日期用于展示
   const dateObj = new Date(targetDate)
@@ -2237,6 +2440,59 @@ async function handleConflictCustomDate(targetDate: string, data: ConflictResolu
   const todayStr = now.toISOString().split('T')[0]
   const nowMinutes = now.getHours() * 60 + now.getMinutes()
   const minStartMin = targetDate === todayStr ? nowMinutes : undefined
+
+  if (data.adjustTarget === 'existing' && data.existingScheduleId) {
+    // ========== 调整原日程：在自定义日期查找原日程的可用时段 ==========
+    const existingSchedule = scheduleStore.getSchedule(data.existingScheduleId)
+    if (!existingSchedule) {
+      messageStore.addSystemMessage('❌ 原日程已不存在，无法调整。')
+      return
+    }
+
+    const existingDuration = timeToMinutes(existingSchedule.endTime) - timeToMinutes(existingSchedule.startTime)
+    const newStart = timeToMinutes(ctx.startTime)
+    const newEnd = timeToMinutes(ctx.endTime)
+
+    // ★ 锚点优先工作时间：原日程若在工作时间内则保持，否则回退到09:00
+    const existingStartMin = timeToMinutes(existingSchedule.startTime)
+    const isInWorkingHours = (existingStartMin >= 510 && existingStartMin < 720) || (existingStartMin >= 810 && existingStartMin < 1050)
+    const anchorTime = isInWorkingHours ? existingSchedule.startTime : '09:00'
+
+    // 查找原日程在新日期的可用时段
+    const nearest = scheduleStore.findNearestAvailableSlot(targetDate, anchorTime, existingDuration, existingSchedule.id, minStartMin)
+    const nearestValid = nearest && !(timeToMinutes(nearest.start) < newEnd && timeToMinutes(nearest.end) > newStart && targetDate === ctx.date)
+      ? nearest : null
+
+    const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin)
+    const filteredSlots = targetDate === ctx.date
+      ? allSlots.filter(s => !(timeToMinutes(s.start) < newEnd && timeToMinutes(s.end) > newStart))
+      : allSlots
+
+    if (nearestValid || filteredSlots.length > 0) {
+      messageStore.addDataMessage('conflict_resolution', '', {
+        conflictInfo: { content: data.conflictInfo.content, startTime: data.conflictInfo.startTime, endTime: data.conflictInfo.endTime },
+        nearestSlot: nearestValid ? { date: targetDate, startTime: nearestValid.start, endTime: nearestValid.end } : undefined,
+        availableSlots: filteredSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end })),
+        originalCtx: { ...ctx },
+        isNextDay: targetDate !== todayStr,
+        selectedIndex: null,
+        userAction: 'pending',
+        adjustTarget: 'existing',
+        existingScheduleId: data.existingScheduleId
+      } as ConflictResolutionData)
+    } else {
+      messageStore.addSystemMessage(
+        `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+          <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
+          <div class="text-sm text-gray-700">${dateLabel} 无法容纳原日程「${existingSchedule.content}」的时长，请选择其他日期。</div>
+        </div>`
+      )
+    }
+    return
+  }
+
+  // ========== 调整新日程：原有逻辑 ==========
+  const duration = timeToMinutes(ctx.endTime) - timeToMinutes(ctx.startTime)
 
   // ★ 关键：先检查新日期的原始时段是否有冲突
   const newDateConflict = scheduleStore.checkConflict(targetDate, ctx.startTime, ctx.endTime)
@@ -2265,7 +2521,9 @@ async function handleConflictCustomDate(targetDate: string, data: ConflictResolu
       originalCtx: { ...ctx, date: targetDate },
       isNextDay: targetDate !== todayStr,
       selectedIndex: null,
-      userAction: 'pending'
+      userAction: 'pending',
+      adjustTarget: data.adjustTarget,
+      existingScheduleId: data.existingScheduleId
     } as ConflictResolutionData)
   } else {
     messageStore.addSystemMessage(
@@ -2393,20 +2651,25 @@ function handleDeleteSkill(index: number) {
   configStore.deleteSkill(index)
 }
 
-// 处理创建会议提交
-async function handleCreateMeetingSubmit(data: any) {
+// 处理创建会议提交（内嵌表单版本）
+async function handleSubmitMeeting(data: import('./types').CreateMeetingData, msgId: number) {
   logger.info('App/Meeting', '========== 创建会议提交 ==========')
   logger.debug('App/Meeting', '表单数据:', data)
   
+  // 锁定表单（标记为已提交）
+  messageStore.updateMessage(msgId, {
+    data: { ...data, status: 'submitted' }
+  })
+  
   // 安全解析日期和时间（兼容 ISO datetime 和纯时间两种格式）
   const meetingDate = data.startTime.includes('T') 
-    ? data.startTime.split('T')[0] 
-    : (data.date || new Date().toISOString().split('T')[0])
+    ? data.startTime.split('T')[0]! 
+    : (new Date().toISOString().split('T')[0]!)
   const meetingStartTime = data.startTime.includes('T') 
-    ? data.startTime.split('T')[1] 
+    ? data.startTime.split('T')[1]! 
     : data.startTime
   const meetingEndTime = data.endTime.includes('T') 
-    ? data.endTime.split('T')[1] 
+    ? data.endTime.split('T')[1]! 
     : data.endTime
   
   // 归一化参会人员列表（防御：兼容字符串/单元素数组等异常格式）
@@ -2435,9 +2698,6 @@ async function handleCreateMeetingSubmit(data: any) {
   const conflict = scheduleStore.checkConflict(newSchedule.date, newSchedule.startTime, newSchedule.endTime)
   if (conflict) {
     logger.warn('App/Meeting', `✗ 时间冲突: ${conflict.content}，启动智能冲突解决`)
-    // 关闭模态框
-    showCreateMeetingModal.value = false
-    createMeetingData.value = {}
     // 调用智能冲突解决
     await resolveConflictAndCreate({
       date: newSchedule.date,
@@ -2470,13 +2730,6 @@ async function handleCreateMeetingSubmit(data: any) {
   // 显示成功消息
   messageStore.addSystemMessage(`✅ 会议创建成功：${data.title}`)
   
-  // 关闭模态框
-  showCreateMeetingModal.value = false
-  logger.info('App/Meeting', '✓ 模态框已关闭')
-  
-  // 重置数据
-  createMeetingData.value = {}
-  
   // 如果有参会人员，询问是否立即通知
   if (attendees.length > 0) {
     logger.info('App/Meeting', '→ 检测到参会人员，准备询问通知')
@@ -2499,125 +2752,256 @@ async function handleCreateMeetingSubmit(data: any) {
   logger.info('App/Meeting', '========== 会议创建完成 ==========')
 }
 
-// 处理出差申请提交（ReAct 模式 - Skill 驱动）
-async function handleTripApplicationSubmit(data: import('./types').TripApplicationData) {
-  logger.info('App/Trip', '========== 出差申请提交 ==========')
-  logger.debug('App/Trip', '表单数据:', data)
-  
-  // 关闭模态框
-  showTripApplication.value = false
-  logger.info('App/Trip', '✓ 表单已关闭')
+// 处理出差表单字段更新（已移除 — 内嵌表单自行管理状态）
 
-  // 1. 使用TripFormManager创建日程
-  logger.info('App/Trip', '→ 调用 TripFormManager 创建日程...')
-  const schedule = TripFormManager.createScheduleFromForm({
-    startDate: data.startDate,
-    startTime: data.startTime,
-    endDate: data.endDate,
-    endTime: data.endTime,
-    from: data.from,
-    to: data.to,
-    transport: data.transport as import('./types').TransportMode,
-    reason: data.reason
-  }, data.scheduleId || `TRIP-${Date.now()}`)
-  logger.info('App/Trip', `✓ 日程对象已创建: ${schedule.id}`)
+// ==================== 取消日程处理 ====================
+
+/**
+ * 展示取消确认卡片
+ * 根据 ReAct 工具返回的 scheduleId/keyword/date/type 匹配日程
+ */
+function showCancelConfirmCard(params: { scheduleId?: string; keyword?: string; date?: string; type?: string }) {
+  const today = scheduleStore.systemCurrentDate || new Date().toISOString().split('T')[0] || ''
   
-  // 冲突检测 → 智能冲突解决
-  const conflict = scheduleStore.checkConflict(schedule.date, schedule.startTime, schedule.endTime)
-  if (conflict) {
-    logger.warn('App/Trip', `✗ 时间冲突: ${conflict.content}，启动智能冲突解决`)
-    await resolveConflictAndCreate({
-      date: schedule.date,
-      startTime: schedule.startTime,
-      endTime: schedule.endTime,
-      endDate: schedule.endDate,
-      content: schedule.content,
-      scenarioCode: 'TRIP',
-      location: schedule.location,
-      transport: data.transport,
-      from: data.from,
-      to: data.to
+  // 构建候选列表：所有未来日程
+  const futureSchedules = scheduleStore.schedules
+    .filter(s => s.date >= today)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime))
+  
+  if (futureSchedules.length === 0) {
+    messageStore.addSystemMessage('暂无可取消的日程。')
+    return
+  }
+  
+  // 尝试匹配日程
+  let matched: typeof futureSchedules[0] | null = null
+  
+  // 优先用 scheduleId 精确匹配
+  if (params.scheduleId) {
+    matched = futureSchedules.find(s => s.id === params.scheduleId) || null
+  }
+  
+  // 按日期 + 类型 + 关键词模糊匹配
+  if (!matched) {
+    let candidates = [...futureSchedules]
+    
+    if (params.date) {
+      const dateFiltered = candidates.filter(s => s.date === params.date || (s.endDate && params.date! >= s.date && params.date! <= s.endDate))
+      if (dateFiltered.length > 0) candidates = dateFiltered
+    }
+    
+    if (params.type) {
+      const typeMap: Record<string, string> = { meeting: 'meeting', trip: 'trip', '会议': 'meeting', '出差': 'trip' }
+      const mappedType = typeMap[params.type] || params.type
+      const typeFiltered = candidates.filter(s => s.type === mappedType)
+      if (typeFiltered.length > 0) candidates = typeFiltered
+    }
+    
+    if (params.keyword) {
+      const kw = params.keyword.toLowerCase()
+      const kwFiltered = candidates.filter(s => 
+        s.content.toLowerCase().includes(kw) || 
+        s.location?.toLowerCase().includes(kw) ||
+        s.meta?.from?.toLowerCase().includes(kw) ||
+        s.meta?.to?.toLowerCase().includes(kw)
+      )
+      if (kwFiltered.length > 0) candidates = kwFiltered
+    }
+    
+    // 如果过滤后只剩一条，就是匹配结果
+    if (candidates.length === 1) {
+      matched = candidates[0]!
+    } else if (candidates.length > 1 && candidates.length < futureSchedules.length) {
+      // 过滤有效果但仍有多条，取第一条作为推荐
+      matched = candidates[0]!
+    }
+  }
+  
+  // 转换为 ScheduleQueryItem 格式
+  const toQueryItem = (s: typeof futureSchedules[0]) => ({
+    id: s.id,
+    date: s.date,
+    startTime: s.startTime,
+    endTime: s.endTime,
+    endDate: s.endDate,
+    content: s.content,
+    type: s.type,
+    location: s.location,
+    attendees: s.attendees,
+    resources: s.resources?.map(r => ({ id: r.id, name: r.name, icon: r.icon, resourceType: r.resourceType })),
+    meta: s.meta
+  })
+  
+  const cancelData: import('./types').CancelConfirmData = {
+    matchedSchedule: matched ? toQueryItem(matched) : null,
+    allSchedules: futureSchedules.map(toQueryItem),
+    userAction: 'pending',
+    selectedId: null
+  }
+  
+  messageStore.addDataMessage('cancel_confirm', '', cancelData)
+}
+
+/**
+ * 用户确认取消日程
+ */
+function handleConfirmCancelSchedule(scheduleId: string, msgId: number) {
+  const schedule = scheduleStore.getSchedule(scheduleId)
+  if (!schedule) {
+    messageStore.addSystemMessage('该日程不存在或已被删除。')
+    return
+  }
+  
+  const content = schedule.content
+  
+  // 清理关联的任务
+  const relatedTasks = taskStore.pendingTasks.filter(t => t.scheduleId === scheduleId)
+  relatedTasks.forEach(t => taskStore.completeTask(t.id))
+  
+  // 删除日程
+  scheduleStore.deleteSchedule(scheduleId)
+  
+  // 更新卡片状态
+  const existingMsg = messageStore.messages.find(m => m.id === msgId)
+  const existingData = existingMsg?.data as import('./types').CancelConfirmData | undefined
+  if (existingData) {
+    messageStore.updateMessage(msgId, {
+      data: {
+        ...existingData,
+        userAction: 'cancelled' as const,
+        selectedId: scheduleId
+      } satisfies import('./types').CancelConfirmData
     })
+  }
+  
+  messageStore.addSystemMessage(`✅ 已取消日程「${content}」`)
+  logger.info('App/Cancel', `日程已取消: ${scheduleId} - ${content}`)
+}
+
+/**
+ * 用户从列表重新选了一条日程（点击"不是这个"后选的）
+ * 直接执行取消
+ */
+function handleReselectCancelSchedule(scheduleId: string, msgId: number) {
+  handleConfirmCancelSchedule(scheduleId, msgId)
+}
+
+// ==================== 修改日程处理 ====================
+
+/**
+ * 展示修改确认卡片
+ * 根据 ReAct 工具返回的 keyword/date/type 智能匹配日程
+ */
+function showEditConfirmCard(params: { keyword?: string; date?: string; type?: string }) {
+  const today = scheduleStore.systemCurrentDate || new Date().toISOString().split('T')[0] || ''
+  
+  // 构建候选列表：所有未来日程
+  const futureSchedules = scheduleStore.schedules
+    .filter(s => s.date >= today)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime))
+  
+  if (futureSchedules.length === 0) {
+    messageStore.addSystemMessage('暂无可修改的日程。')
     return
   }
   
-  const tripSuccess = scheduleStore.addSchedule(schedule)
-  if (!tripSuccess) {
-    logger.error('App/Trip', '✗ addSchedule 返回失败')
-    messageStore.addSystemMessage('❌ 无法创建出差日程：该时段已有日程。')
+  // 尝试匹配日程
+  let matched: typeof futureSchedules[0] | null = null
+  let candidates = [...futureSchedules]
+  
+  if (params.date) {
+    const dateFiltered = candidates.filter(s => s.date === params.date || (s.endDate && params.date! >= s.date && params.date! <= s.endDate))
+    if (dateFiltered.length > 0) candidates = dateFiltered
+  }
+  
+  if (params.type) {
+    const typeMap: Record<string, string> = { meeting: 'meeting', trip: 'trip', '会议': 'meeting', '出差': 'trip' }
+    const mappedType = typeMap[params.type] || params.type
+    const typeFiltered = candidates.filter(s => s.type === mappedType)
+    if (typeFiltered.length > 0) candidates = typeFiltered
+  }
+  
+  if (params.keyword) {
+    const kw = params.keyword.toLowerCase()
+    const kwFiltered = candidates.filter(s => 
+      s.content.toLowerCase().includes(kw) || 
+      s.location?.toLowerCase().includes(kw) ||
+      s.meta?.from?.toLowerCase().includes(kw) ||
+      s.meta?.to?.toLowerCase().includes(kw)
+    )
+    if (kwFiltered.length > 0) candidates = kwFiltered
+  }
+  
+  if (candidates.length === 1) {
+    matched = candidates[0]!
+  } else if (candidates.length > 1 && candidates.length < futureSchedules.length) {
+    matched = candidates[0]!
+  }
+  
+  // 转换为 ScheduleQueryItem 格式
+  const toQueryItem = (s: typeof futureSchedules[0]) => ({
+    id: s.id,
+    date: s.date,
+    startTime: s.startTime,
+    endTime: s.endTime,
+    endDate: s.endDate,
+    content: s.content,
+    type: s.type,
+    location: s.location,
+    attendees: s.attendees,
+    resources: s.resources?.map(r => ({ id: r.id, name: r.name, icon: r.icon, resourceType: r.resourceType })),
+    meta: s.meta
+  })
+  
+  const editData: import('./types').EditConfirmData = {
+    matchedSchedule: matched ? toQueryItem(matched) : null,
+    allSchedules: futureSchedules.map(toQueryItem),
+    userAction: 'pending',
+    selectedId: null
+  }
+  
+  messageStore.addDataMessage('edit_confirm', '', editData)
+}
+
+/**
+ * 用户确认修改日程 → 打开 DetailModal
+ */
+function handleConfirmEditSchedule(scheduleId: string, msgId: number) {
+  const schedule = scheduleStore.getSchedule(scheduleId)
+  if (!schedule) {
+    messageStore.addSystemMessage('该日程不存在或已被删除。')
     return
   }
-  logger.info('App/Trip', '✓ 日程已添加到 store')
   
-  // 切换日期视图到出差日期，并滚动时间轴
+  // 更新卡片状态
+  const existingMsg = messageStore.messages.find(m => m.id === msgId)
+  const existingData = existingMsg?.data as import('./types').EditConfirmData | undefined
+  if (existingData) {
+    messageStore.updateMessage(msgId, {
+      data: {
+        ...existingData,
+        userAction: 'editing' as const,
+        selectedId: scheduleId
+      } satisfies import('./types').EditConfirmData
+    })
+  }
+  
+  // 切换日期并打开编辑弹窗
   if (schedule.date !== scheduleStore.currentDate) {
     scheduleStore.setDate(schedule.date)
   }
-  timelineRef.value?.scrollToTime(schedule.startTime)
-
-  // 2. 使用 Skill Action 处理器执行后续流程
-  logger.info('App/Trip', '→ 开始 Skill Action 链式执行...')
-  const { executeAction } = await import('./services/react/skills/actionHandlers')
-  const actionContext = {
-    scheduleStore,
-    taskStore,
-    messageStore,
-    configStore,
-    brain
-  }
-  
-  // 执行审批 action（会自动链式调用后续 action）
-  logger.info('App/Trip', '→ 执行第一个 action: approve_business_trip')
-  let result = await executeAction('approve_business_trip', {
-    scheduleId: schedule.id,
-    from: data.from,
-    to: data.to,
-    transport: data.transport
-  }, actionContext)
-  logger.info('App/Trip', `✓ 第一个 action 完成: ${result.success ? '成功' : '失败'}`)
-  
-  // 链式执行后续 actions
-  let chainStep = 1
-  while (result.success && result.nextAction) {
-    chainStep++
-    logger.info('App/Trip', `→ 执行链式 action [${chainStep}]: ${result.nextAction}`)
-    result = await executeAction(
-      result.nextAction,
-      result.nextActionInput || {},
-      actionContext
-    )
-    logger.info('App/Trip', `✓ 链式 action [${chainStep}] 完成: ${result.success ? '成功' : '失败'}`)
-  }
-  
-  if (!result.success) {
-    logger.error('App/Trip', `✗ Action 链执行失败: ${result.error}`)
-  } else {
-    logger.info('App/Trip', '✓ 所有 Action 链执行完毕')
-  }
-
-  // 重置表单数据
-  currentTripFormData.value = {
-    scheduleId: '',
-    taskId: '',
-    startDate: '',
-    startTime: '',
-    endDate: '',
-    endTime: '',
-    from: '',
-    to: '',
-    transport: '',
-    reason: '',
-    status: 'draft'
-  }
-  logger.info('App/Trip', '✓ 表单数据已重置')
-  logger.info('App/Trip', '========== 出差申请流程完成 ==========')
+  selectedEvent.value = schedule
+  showDetailModal.value = true
+  messageStore.addSystemMessage(`已打开「${schedule.content}」的编辑页面`)
+  logger.info('App/Edit', `打开编辑: ${scheduleId} - ${schedule.content}`)
 }
 
-// 处理出差表单字段更新
-function handleTripFieldUpdate(field: string, value: string) {
-  if (currentTripFormData.value) {
-    (currentTripFormData.value as any)[field] = value
-  }
+/**
+ * 用户从列表重新选了一条日程（点击"不是这个"后选的）
+ * 直接打开编辑
+ */
+function handleReselectEditSchedule(scheduleId: string, msgId: number) {
+  handleConfirmEditSchedule(scheduleId, msgId)
 }
 
 function handleToggleScenarioSkill(scenarioCode: string, skillCode: string) {
@@ -2664,6 +3048,7 @@ onUnmounted(() => {
         <TimelinePanel
           ref="timelineRef"
           :schedules="scheduleStore.currentDaySchedules"
+          :current-date="scheduleStore.currentDate"
           @click-event="handleClickEvent"
           @delete-event="handleDeleteEvent"
         />
@@ -2760,8 +3145,14 @@ onUnmounted(() => {
       @show-more-conflict-slots="handleConflictShowMore"
       @cancel-conflict="handleConflictCancel"
       @select-conflict-custom-date="handleConflictCustomDate"
+      @select-conflict-adjust-target="handleConflictAdjustTarget"
       @pay-all="handlePayAll"
       @change-order="handleChangeOrder"
+      @submit-meeting="handleSubmitMeeting"
+      @confirm-cancel-schedule="handleConfirmCancelSchedule"
+      @reselect-cancel-schedule="handleReselectCancelSchedule"
+      @confirm-edit-schedule="handleConfirmEditSchedule"
+      @reselect-edit-schedule="handleReselectEditSchedule"
     />
     </div>
 
@@ -2792,13 +3183,7 @@ onUnmounted(() => {
       @update-l-l-m-config="configStore.setLLMConfig"
     />
 
-    <!-- Create Meeting Modal -->
-    <CreateMeetingModal
-      :visible="showCreateMeetingModal"
-      :initial-data="createMeetingData"
-      @close="showCreateMeetingModal = false"
-      @submit="handleCreateMeetingSubmit"
-    />
+    <!-- Create Meeting Modal removed — now inline in ChatPanel -->
 
     <!-- Log Viewer Modal -->
     <LogViewerModal
@@ -2806,22 +3191,7 @@ onUnmounted(() => {
       @close="showLogViewer = false"
     />
 
-    <!-- Trip Application Modal -->
-    <Teleport to="body">
-      <div 
-        v-if="showTripApplication" 
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
-        @click.self="showTripApplication = false"
-      >
-        <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
-          <TripApplication 
-            :data="currentTripFormData"
-            @submit="handleTripApplicationSubmit"
-            @update-field="handleTripFieldUpdate"
-          />
-        </div>
-      </div>
-    </Teleport>
+    <!-- Trip Application Modal removed — now inline in ChatPanel -->
 
     <!-- Processing Overlay -->
     <div 

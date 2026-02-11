@@ -234,6 +234,104 @@ export const conflictDetectorTool: Tool = {
   }
 }
 
+/**
+ * 取消日程工具
+ * 根据用户描述匹配并展示取消确认卡片
+ */
+export const cancelScheduleTool: Tool = {
+  name: 'cancel_schedule',
+  description: '取消/删除一个日程。根据日期、类型、关键词匹配日程并展示确认卡片',
+  category: 'schedule',
+  parameters: [
+    {
+      name: 'date',
+      type: 'string',
+      description: '要取消的日程日期 (YYYY-MM-DD格式)',
+      required: false
+    },
+    {
+      name: 'keyword',
+      type: 'string',
+      description: '日程关键词（主题、地点等）',
+      required: false
+    },
+    {
+      name: 'type',
+      type: 'string',
+      description: '日程类型：meeting(会议)、trip(出差)、general(普通)',
+      required: false,
+      enum: ['meeting', 'trip', 'general']
+    }
+  ],
+  execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
+    try {
+      return {
+        success: true,
+        data: {
+          action: 'show_cancel_confirm',
+          date: params.date || null,
+          keyword: params.keyword || null,
+          type: params.type || null
+        }
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: `取消日程错误: ${(error as Error).message}`
+      }
+    }
+  }
+}
+
+/**
+ * 修改日程工具
+ * 根据用户描述匹配并展示修改确认卡片
+ */
+export const editScheduleTool: Tool = {
+  name: 'edit_schedule',
+  description: '修改/编辑一个已有日程。根据日期、类型、关键词匹配日程并展示确认卡片',
+  category: 'schedule',
+  parameters: [
+    {
+      name: 'date',
+      type: 'string',
+      description: '要修改的日程日期 (YYYY-MM-DD格式)',
+      required: false
+    },
+    {
+      name: 'keyword',
+      type: 'string',
+      description: '日程关键词（主题、地点等）',
+      required: false
+    },
+    {
+      name: 'type',
+      type: 'string',
+      description: '日程类型：meeting(会议)、trip(出差)、general(普通)',
+      required: false,
+      enum: ['meeting', 'trip', 'general']
+    }
+  ],
+  execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
+    try {
+      return {
+        success: true,
+        data: {
+          action: 'show_edit_confirm',
+          date: params.date || null,
+          keyword: params.keyword || null,
+          type: params.type || null
+        }
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: `修改日程错误: ${(error as Error).message}`
+      }
+    }
+  }
+}
+
 // ==================== 辅助函数 ====================
 
 /**

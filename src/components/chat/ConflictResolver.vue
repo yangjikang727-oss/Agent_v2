@@ -12,6 +12,7 @@ const emit = defineEmits<{
   showMoreSlots: [data: ConflictResolutionData, msgId: number]
   cancelConflict: [data: ConflictResolutionData, msgId: number]
   selectCustomDate: [date: string, data: ConflictResolutionData, msgId: number]
+  selectAdjustTarget: [target: 'existing' | 'new', data: ConflictResolutionData]
 }>()
 
 // ── 日期选择面板 ──
@@ -48,8 +49,12 @@ const tomorrowStr = computed(() => {
 const minDate = computed(() => tomorrowStr.value)
 
 // ── 状态计算 ──
+const isTargetPending = computed(() => {
+  return props.data.adjustTarget === 'pending'
+})
+
 const isRecommendPhase = computed(() => {
-  return props.data.nearestSlot && props.data.userAction === 'pending'
+  return props.data.adjustTarget !== 'pending' && props.data.nearestSlot && props.data.userAction === 'pending'
 })
 
 const isShowMorePhase = computed(() => {
@@ -57,7 +62,7 @@ const isShowMorePhase = computed(() => {
 })
 
 const isDirectSlotPhase = computed(() => {
-  return !props.data.nearestSlot && props.data.userAction === 'pending'
+  return props.data.adjustTarget !== 'pending' && !props.data.nearestSlot && props.data.userAction === 'pending'
 })
 
 const isDone = computed(() => {
@@ -99,6 +104,19 @@ function handleDateConfirm() {
   if (isDone.value || !customDate.value) return
   emit('selectCustomDate', customDate.value, props.data, 0)
 }
+
+// ── 调整目标选择 ──
+function handleSelectAdjustTarget(target: 'existing' | 'new') {
+  if (props.data.adjustTarget !== 'pending') return
+  emit('selectAdjustTarget', target, props.data)
+}
+
+// 调整目标的标签文本
+const adjustTargetLabel = computed(() => {
+  if (props.data.adjustTarget === 'existing') return '调整原日程'
+  if (props.data.adjustTarget === 'new') return '调整新日程'
+  return ''
+})
 </script>
 
 <template>
@@ -113,6 +131,45 @@ function handleDateConfirm() {
         与日程「<b>{{ data.conflictInfo.content }}</b>」
         ({{ data.conflictInfo.startTime }} - {{ data.conflictInfo.endTime }}) 存在时间冲突
       </div>
+    </div>
+
+    <!-- ========== 调整目标选择阶段 ========== -->
+    <template v-if="isTargetPending">
+      <div class="bg-purple-50 border-l-4 border-purple-400 p-3 rounded">
+        <div class="font-bold text-purple-600 text-xs mb-1 flex items-center gap-1">
+          <i class="fa-solid fa-arrows-left-right"></i>
+          请选择调整方式
+        </div>
+        <div class="text-sm text-gray-700">
+          您希望调整哪个日程的时间？
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <button
+          @click="handleSelectAdjustTarget('existing')"
+          class="px-4 py-2 rounded-lg text-xs font-medium transition-all border bg-amber-500 text-white border-amber-500 hover:bg-amber-600 shadow-sm cursor-pointer"
+        >
+          <i class="fa-solid fa-calendar-check mr-1"></i> 调整原日程「{{ data.conflictInfo.content }}」
+        </button>
+        <button
+          @click="handleSelectAdjustTarget('new')"
+          class="px-4 py-2 rounded-lg text-xs font-medium transition-all border bg-indigo-500 text-white border-indigo-500 hover:bg-indigo-600 shadow-sm cursor-pointer"
+        >
+          <i class="fa-solid fa-calendar-plus mr-1"></i> 调整新日程「{{ data.originalCtx.content || '待创建' }}」
+        </button>
+        <button
+          @click="handleCancel"
+          class="px-4 py-2 rounded-lg text-xs font-medium transition-all border bg-white text-red-500 border-red-200 hover:bg-red-50 cursor-pointer"
+        >
+          <i class="fa-solid fa-xmark mr-1"></i> 取消创建
+        </button>
+      </div>
+    </template>
+
+    <!-- ========== 已选择调整目标的提示 ========== -->
+    <div v-if="data.adjustTarget !== 'pending' && !isDone" class="text-xs text-purple-600 flex items-center gap-1 bg-purple-50 px-3 py-1.5 rounded">
+      <i class="fa-solid fa-arrow-right"></i>
+      已选择：<b>{{ adjustTargetLabel }}</b>
     </div>
 
     <!-- ========== 推荐确认阶段 ========== -->

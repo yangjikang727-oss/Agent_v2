@@ -6,6 +6,7 @@ import { calculateTimePosition, calculateEventHeight } from '../../utils/dateUti
 
 const props = defineProps<{
   schedule: Schedule
+  currentDate?: string
 }>()
 
 const emit = defineEmits<{
@@ -13,10 +14,70 @@ const emit = defineEmits<{
   delete: [id: string]
 }>()
 
+// 时间轴边界常量
+const TIMELINE_START = '07:00'  // 时间轴起始
+const TIMELINE_END = '21:00'    // 时间轴结束
+
+/**
+ * 计算跨天日程在当前查看日期的有效显示时间范围
+ * - 出发日：startTime → 21:00
+ * - 返程日：07:00 → endTime
+ * - 中间日：07:00 → 21:00（全天）
+ */
+const effectiveTimeRange = computed(() => {
+  const s = props.schedule
+  const viewDate = props.currentDate
+
+  // 非跨天日程 或 无 currentDate → 原样返回
+  if (!s.endDate || !viewDate || s.date === s.endDate) {
+    return { start: s.startTime, end: s.endTime }
+  }
+
+  if (viewDate === s.date) {
+    // 出发日：从 startTime 延伸到时间轴底部
+    return { start: s.startTime, end: TIMELINE_END }
+  } else if (viewDate === s.endDate) {
+    // 返程日：从时间轴顶部延伸到 endTime
+    return { start: TIMELINE_START, end: s.endTime }
+  } else if (viewDate > s.date && viewDate < s.endDate) {
+    // 中间日：全天
+    return { start: TIMELINE_START, end: TIMELINE_END }
+  }
+
+  // 不在范围内（理论上不会到这里）
+  return { start: s.startTime, end: s.endTime }
+})
+
+/**
+ * 格式化日期为 yyyy/MM/dd
+ */
+function formatDate(date: string): string {
+  if (!date) return ''
+  // date 为 yyyy-MM-dd 格式
+  return date.replace(/-/g, '/')
+}
+
+/**
+ * 显示用的完整时间文本（年/月/日 时:分）
+ */
+const displayTimeText = computed(() => {
+  const s = props.schedule
+  const startDate = formatDate(s.date)
+  const endDate = s.endDate ? formatDate(s.endDate) : startDate
+  const startFull = `${startDate} ${s.startTime}`
+  const endFull = `${endDate} ${s.endTime}`
+  // 同一天时只显示日期一次
+  if (startDate === endDate) {
+    return `${startFull} - ${s.endTime}`
+  }
+  return `${startFull} - ${endFull}`
+})
+
 // 计算样式
 const cardStyle = computed(() => {
-  const top = calculateTimePosition(props.schedule.startTime)
-  const height = calculateEventHeight(props.schedule.startTime, props.schedule.endTime)
+  const { start, end } = effectiveTimeRange.value
+  const top = calculateTimePosition(start)
+  const height = calculateEventHeight(start, end)
   
   let type: ScheduleType = 'general'
   if (props.schedule.type?.includes('trip')) type = 'trip'
@@ -47,14 +108,10 @@ const cardStyle = computed(() => {
     </div>
 
     <!-- Time -->
-    <div class="text-[10px] opacity-80 flex items-center gap-2 font-medium">
+    <div class="text-[10px] opacity-80 flex items-center gap-2 font-medium flex-wrap">
       <span>
         <i class="fa-regular fa-clock"></i> 
-        {{ schedule.startTime }} - {{ schedule.endTime }}
-      </span>
-      <!-- 跨天行程显示返程日期 -->
-      <span v-if="schedule.endDate" class="text-[9px] bg-purple-100 px-1.5 py-0.5 rounded">
-        <i class="fa-solid fa-arrow-right"></i> {{ schedule.endDate }}
+        {{ displayTimeText }}
       </span>
       <span v-if="schedule.location">
         <i class="fa-solid fa-location-dot"></i> 

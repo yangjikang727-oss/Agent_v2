@@ -58,6 +58,36 @@ function tryQuickSkillMatch(query: string, currentDate: string): QuickMatchResul
     { pattern: /出差|差旅|飞.*去|前往.*出差/, skill: 'apply_business_trip' }
   ]
   
+  // 取消日程相关关键词（放在修改之前，"取消"优先匹配）
+  const cancelPatterns = [
+    /取消.*日程|删除.*日程|取消.*会议|取消.*出差|不去了|不开了/,
+    /取消.*行程|删除.*行程|撤销.*日程/
+  ]
+  
+  for (const pattern of cancelPatterns) {
+    if (pattern.test(normalizedQuery)) {
+      // 提取日期和类型线索
+      const dateMatch = normalizedQuery.match(/今天|明天|后天|(\d{1,2})月(\d{1,2})日/)
+      let scheduleType: string | undefined
+      if (/会议|开会/.test(normalizedQuery)) scheduleType = 'meeting'
+      else if (/出差|差旅|行程/.test(normalizedQuery)) scheduleType = 'trip'
+      
+      // 提取关键词（去掉取消/删除等动词后的内容）
+      const kwText = normalizedQuery.replace(/取消|删除|撤销|日程|会议|出差|行程|今天|明天|后天|的/g, '').trim()
+      
+      return {
+        matched: true,
+        skillName: 'cancel_schedule',
+        action: 'cancel_schedule',
+        params: {
+          date: dateMatch ? extractDate(normalizedQuery, currentDate) : undefined,
+          type: scheduleType,
+          keyword: kwText || undefined
+        }
+      }
+    }
+  }
+  
   // 修改日程相关关键词
   const editPatterns = [
     { pattern: /修改.*日程|调整.*日程|编辑.*日程|更改.*日程|改.*日程/, skill: 'edit_schedule' },
@@ -104,13 +134,26 @@ function tryQuickSkillMatch(query: string, currentDate: string): QuickMatchResul
   }
   
   // 尝试匹配修改日程（放在出差之后，避免"调整出差日程"误匹配）
-  for (const { pattern, skill } of editPatterns) {
+  for (const { pattern } of editPatterns) {
     if (pattern.test(normalizedQuery)) {
+      // 提取日期和类型线索
+      const dateMatch = normalizedQuery.match(/今天|明天|后天|(\d{1,2})月(\d{1,2})日/)
+      let scheduleType: string | undefined
+      if (/会议|开会/.test(normalizedQuery)) scheduleType = 'meeting'
+      else if (/出差|差旅|行程/.test(normalizedQuery)) scheduleType = 'trip'
+      
+      // 提取关键词（去掉修改/编辑等动词后的内容）
+      const kwText = normalizedQuery.replace(/修改|调整|编辑|更改|改一下|日程|会议|出差|行程|时间|今天|明天|后天|的/g, '').trim()
+      
       return {
         matched: true,
-        skillName: skill,
-        action: 'open_schedule_list',
-        params: {}
+        skillName: 'edit_schedule',
+        action: 'edit_schedule',
+        params: {
+          date: dateMatch ? extractDate(normalizedQuery, currentDate) : undefined,
+          type: scheduleType,
+          keyword: kwText || undefined
+        }
       }
     }
   }

@@ -7,6 +7,7 @@ import EventCard from './EventCard.vue'
 
 defineProps<{
   schedules: Schedule[]
+  currentDate?: string
 }>()
 
 const emit = defineEmits<{
@@ -78,6 +79,7 @@ defineExpose({
         v-for="schedule in schedules"
         :key="schedule.id"
         :schedule="schedule"
+        :current-date="currentDate"
         @click="emit('clickEvent', $event)"
         @delete="emit('deleteEvent', $event)"
       />

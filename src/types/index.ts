@@ -56,7 +56,7 @@ export interface ScheduleDraft {
 
 // Gemini 意图解析结果
 export interface IntentData {
-  intent: 'create' | 'query' | 'update' | 'chat'
+  intent: 'create' | 'query' | 'update' | 'cancel' | 'chat'
   summary?: string
   date?: string
   startTime?: string
