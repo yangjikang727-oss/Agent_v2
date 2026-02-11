@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, watch } from 'vue'
-import type { Message, Task, ResourceCardData, TransportSelectorData, AttendeeTableData, TransportOption, ParamConfirmData, ScheduleListData, FlightListData, HotelListData, TripApplicationData, NotifyOptionData, Schedule } from '../../types'
+import type { Message, Task, ResourceCardData, TransportSelectorData, AttendeeTableData, TransportOption, ParamConfirmData, ScheduleListData, FlightListData, HotelListData, TripApplicationData, NotifyOptionData, Schedule, ConflictResolutionData, ScheduleQueryResultData } from '../../types'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import QuickChips from './QuickChips.vue'
@@ -15,6 +15,8 @@ import HotelList from './HotelList.vue'
 import TripApplication from './TripApplication.vue'
 import NotifyOption from './NotifyOption.vue'
 import PaymentOrderList from './PaymentOrderList.vue'
+import ConflictResolver from './ConflictResolver.vue'
+import ScheduleQueryResult from './ScheduleQueryResult.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -47,7 +49,7 @@ const emit = defineEmits<{
   confirmHotel: [hotelId: string, scheduleId: string, msgId: number]
   cancelHotel: [scheduleId: string, msgId: number]
   submitTripApplication: [data: TripApplicationData, msgId: number]
-  selectNotifyOption: [option: 'now' | 'before_1h', scheduleId: string, msgId: number]
+  selectNotifyOption: [option: 'now' | 'before_15min', scheduleId: string, msgId: number]
   skipNotify: [scheduleId: string, msgId: number]
   removeAttendee: [msgId: number, uid: string]
   restoreAttendee: [msgId: number, uid: string]
@@ -55,6 +57,13 @@ const emit = defineEmits<{
   confirmSkillParams: [params: Record<string, string | number>, msgId: number, data: ParamConfirmData]
   cancelSkillParams: [msgId: number]
   selectScheduleToEdit: [schedule: Schedule]
+  selectConflictSlot: [slotIndex: number, data: ConflictResolutionData, msgId: number]
+  acceptConflictNearest: [data: ConflictResolutionData, msgId: number]
+  showMoreConflictSlots: [data: ConflictResolutionData, msgId: number]
+  cancelConflict: [data: ConflictResolutionData, msgId: number]
+  selectConflictCustomDate: [date: string, data: ConflictResolutionData, msgId: number]
+  payAll: [data: import('../../types/message').PaymentOrderData, msgId: number]
+  changeOrder: [orderId: string, orderType: 'flight' | 'hotel', data: import('../../types/message').PaymentOrderData, msgId: number]
 }>()
 
 const chatBoxRef = ref<HTMLElement | null>(null)
@@ -125,6 +134,14 @@ function isNotifyOption(msg: Message): msg is Message & { data: NotifyOptionData
 
 function isPaymentOrder(msg: Message): msg is Message & { data: import('../../types').PaymentOrderData } {
   return msg.type === 'payment_order' && msg.data !== null && 'orders' in (msg.data as object)
+}
+
+function isConflictResolution(msg: Message): msg is Message & { data: ConflictResolutionData } {
+  return msg.type === 'conflict_resolution' && msg.data !== null && 'availableSlots' in (msg.data as object)
+}
+
+function isScheduleQueryResult(msg: Message): msg is Message & { data: ScheduleQueryResultData } {
+  return msg.type === 'schedule_query_result' && msg.data !== null && 'schedules' in (msg.data as object) && 'summary' in (msg.data as object)
 }
 
 defineExpose({
@@ -277,6 +294,25 @@ defineExpose({
           <!-- Payment Order List -->
           <PaymentOrderList
             v-if="isPaymentOrder(msg)"
+            :data="msg.data"
+            @payAll="(data) => emit('payAll', data, msg.id)"
+            @changeOrder="(orderId, orderType, data) => emit('changeOrder', orderId, orderType, data, msg.id)"
+          />
+
+          <!-- Conflict Resolution -->
+          <ConflictResolver
+            v-if="isConflictResolution(msg)"
+            :data="msg.data"
+            @selectSlot="(idx, data) => emit('selectConflictSlot', idx, data, msg.id)"
+            @acceptNearest="(data) => emit('acceptConflictNearest', data, msg.id)"
+            @showMoreSlots="(data) => emit('showMoreConflictSlots', data, msg.id)"
+            @cancelConflict="(data) => emit('cancelConflict', data, msg.id)"
+            @selectCustomDate="(date, data) => emit('selectConflictCustomDate', date, data, msg.id)"
+          />
+
+          <!-- Schedule Query Result -->
+          <ScheduleQueryResult
+            v-if="isScheduleQueryResult(msg)"
             :data="msg.data"
           />
         </ChatMessage>

@@ -1,3 +1,12 @@
+/**
+ * 任务状态管理
+ * 
+ * 管理日程关联的任务列表，支持：
+ * - 任务增删改查、批量操作
+ * - 按日程 ID 关联查询
+ * - 待办任务统计
+ */
+
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Task, TaskStatus } from '../types'

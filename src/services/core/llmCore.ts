@@ -355,14 +355,3 @@ async function callGeminiRawChat(
   return null
 }
 
-// ==================== 兼容旧接口 (废弃警告) ====================
-
-/** @deprecated 请使用 callLLM */
-export async function callGeminiLegacy<T = unknown>(
-  prompt: string,
-  systemInstruction: string = '',
-  apiKey: string = ''
-): Promise<T | null> {
-  console.warn('[Deprecated] callGemini is deprecated. Use callLLM instead.')
-  return callLLM<T>(prompt, systemInstruction, { provider: 'gemini', apiKey })
-}

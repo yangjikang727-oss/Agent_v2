@@ -11,6 +11,15 @@
 
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR'
 
+export interface SessionInfo {
+  sessionId: string
+  label: string        // 可读标签，如 "2025-06-15 14:30"
+  logCount: number
+  firstTime: number    // 最早日志时间
+  lastTime: number     // 最近日志时间
+  isCurrent: boolean
+}
+
 export interface LogEntry {
   timestamp: number
   datetime: string
@@ -385,6 +394,126 @@ class Logger {
 
         request.onerror = () => {
           reject(new Error('获取会话列表失败'))
+        }
+      } catch (error) {
+        reject(error)
+      }
+    })
+  }
+
+  /**
+   * 将 sessionId (session_YYYYMMDD_timestamp) 转为可读标签
+   */
+  private formatSessionLabel(sessionId: string): string {
+    // 格式: session_20250615_1718438400000
+    const parts = sessionId.split('_')
+    if (parts.length >= 3) {
+      const ts = parseInt(parts[2] || '0', 10)
+      if (ts > 0) {
+        const d = new Date(ts)
+        const pad = (n: number) => n.toString().padStart(2, '0')
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+      }
+    }
+    return sessionId
+  }
+
+  /**
+   * 获取所有会话的统计信息（日志数、时间范围）
+   * 按时间倒序排列，当前会话标记 isCurrent
+   */
+  async getSessionsWithStats(): Promise<SessionInfo[]> {
+    if (!this.db) return []
+
+    return new Promise((resolve, reject) => {
+      try {
+        const transaction = this.db!.transaction([this.storeName], 'readonly')
+        const objectStore = transaction.objectStore(this.storeName)
+        const request = objectStore.getAll()
+
+        request.onsuccess = () => {
+          const allLogs: LogEntry[] = request.result
+          const sessionMap = new Map<string, { count: number; first: number; last: number }>()
+
+          for (const log of allLogs) {
+            const existing = sessionMap.get(log.sessionId)
+            if (existing) {
+              existing.count++
+              if (log.timestamp < existing.first) existing.first = log.timestamp
+              if (log.timestamp > existing.last) existing.last = log.timestamp
+            } else {
+              sessionMap.set(log.sessionId, {
+                count: 1,
+                first: log.timestamp,
+                last: log.timestamp
+              })
+            }
+          }
+
+          const sessions: SessionInfo[] = []
+          for (const [sid, stats] of sessionMap) {
+            sessions.push({
+              sessionId: sid,
+              label: this.formatSessionLabel(sid),
+              logCount: stats.count,
+              firstTime: stats.first,
+              lastTime: stats.last,
+              isCurrent: sid === this.sessionId
+            })
+          }
+
+          // 按最近时间倒序，当前会话始终在最前
+          sessions.sort((a, b) => {
+            if (a.isCurrent) return -1
+            if (b.isCurrent) return 1
+            return b.lastTime - a.lastTime
+          })
+
+          resolve(sessions)
+        }
+
+        request.onerror = () => {
+          reject(new Error('获取会话统计失败'))
+        }
+      } catch (error) {
+        reject(error)
+      }
+    })
+  }
+
+  /**
+   * 删除指定会话的所有日志
+   */
+  async deleteSession(sessionId: string): Promise<number> {
+    if (!this.db) return 0
+    // 不允许删除当前会话
+    if (sessionId === this.sessionId) return 0
+
+    return new Promise((resolve, reject) => {
+      try {
+        const transaction = this.db!.transaction([this.storeName], 'readwrite')
+        const objectStore = transaction.objectStore(this.storeName)
+        const index = objectStore.index('sessionId')
+        const request = index.openCursor(sessionId)
+
+        let deletedCount = 0
+
+        request.onsuccess = (event) => {
+          const cursor = (event.target as IDBRequest).result
+          if (cursor) {
+            cursor.delete()
+            deletedCount++
+            cursor.continue()
+          }
+        }
+
+        transaction.oncomplete = () => {
+          console.log(`[Logger] ✓ 已删除会话 ${sessionId} 的 ${deletedCount} 条日志`)
+          resolve(deletedCount)
+        }
+
+        transaction.onerror = () => {
+          reject(new Error('删除会话日志失败'))
         }
       } catch (error) {
         reject(error)

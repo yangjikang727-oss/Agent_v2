@@ -1,3 +1,10 @@
+/**
+ * 技能系统数据模型
+ * 
+ * 定义技能元数据(SkillMeta)、场景配置(Scenario)、技能执行结果(SkillResult)等类型，
+ * 以及默认的技能列表和场景配置。
+ */
+
 import type { Schedule } from './schedule'
 import type { ResourceCardData, TransportSelectorData, AttendeeTableData, ParamConfirmData, FlightListData, HotelListData, TripApplicationData, PaymentOrderItem } from './message'
 

@@ -1,3 +1,10 @@
+/**
+ * 任务数据模型
+ * 
+ * 定义任务(Task)和任务状态(TaskStatus)类型。
+ * 任务是日程下的可执行操作单元，如预订会议室、通知参会人等。
+ */
+
 import type { PaymentOrderItem } from './message'
 
 // 任务状态

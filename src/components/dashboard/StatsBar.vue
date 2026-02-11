@@ -34,7 +34,7 @@ function handleDateChange(event: Event) {
           class="text-[10px] text-blue-500 hover:text-blue-600 font-bold px-2 py-0.5 rounded hover:bg-blue-50 transition"
           title="回到今天"
         >
-          <i class="fa-solid fa-calendar-day mr-1"></i>今天
+          <i class="fa-solid fa-calendar-day mr-1"></i>回到今天
         </button>
       </div>
       <div class="flex items-center w-full justify-between">

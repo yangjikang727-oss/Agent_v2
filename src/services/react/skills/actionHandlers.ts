@@ -208,7 +208,7 @@ export async function askAutoExecuteAction(
     })
     
     messageStore.addSystemMessage(
-      '已生成交通安排和酒店预订任务，需要我现在自动帮你跑一遍推荐吗？(回复“是”或“否”)'
+      '已生成交通安排和酒店预订任务，需要我现在自动帮您推荐吗？'
     )
     
     console.log('[Action] ask_auto_execute: 已询问用户')

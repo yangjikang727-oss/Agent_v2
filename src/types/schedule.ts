@@ -1,3 +1,10 @@
+/**
+ * 日程数据模型
+ * 
+ * 定义日程(Schedule)、资源(Resource)、交通方式(TransportMode)等核心类型，
+ * 以及不同日程类型的主题配色方案。
+ */
+
 import type { PaymentOrderItem } from './message'
 
 // 交通方式

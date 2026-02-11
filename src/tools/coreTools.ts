@@ -1,3 +1,12 @@
+/**
+ * 核心工具集
+ * 
+ * 提供 ReAct 引擎可调用的基础工具：
+ * - date_calculator: 相对日期表达式解析（今天/明天/下周X）
+ * - schedule_query: 按日期/关键词查询日程
+ * - conflict_detector: 时间段冲突检测
+ */
+
 import type { Tool, ToolContext, ToolResult } from '../services/react/toolRegistry'
 import type { Schedule } from '../types'
 import { timeToMinutes } from '../utils/dateUtils'
@@ -95,9 +104,14 @@ export const scheduleQueryTool: Tool = {
       
       let filtered = [...schedules]
       
-      // 按日期过滤
+      // 按日期过滤（支持跨天日程：查询日期落在 s.date ~ s.endDate 范围内即匹配）
       if (date) {
-        filtered = filtered.filter((s: Schedule) => s.date === date)
+        filtered = filtered.filter((s: Schedule) => {
+          if (s.date === date) return true
+          // 跨天日程：有 endDate 且查询日期在 date ~ endDate 之间
+          if (s.endDate && s.endDate >= date && s.date <= date) return true
+          return false
+        })
       }
       
       // 按关键词过滤
@@ -115,6 +129,8 @@ export const scheduleQueryTool: Tool = {
       return {
         success: true,
         data: {
+          queryDate: date || null,
+          queryKeyword: keyword || null,
           totalCount: filtered.length,
           returnedCount: results.length,
           schedules: results.map((s: Schedule) => ({
@@ -122,9 +138,13 @@ export const scheduleQueryTool: Tool = {
             date: s.date,
             startTime: s.startTime,
             endTime: s.endTime,
+            endDate: s.endDate,
             content: s.content,
+            type: s.type,
             location: s.location,
-            attendees: s.attendees
+            attendees: s.attendees,
+            resources: s.resources,
+            meta: s.meta
           }))
         }
       }

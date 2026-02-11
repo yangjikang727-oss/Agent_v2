@@ -1,3 +1,11 @@
+/**
+ * 工具注册入口
+ * 
+ * 将所有核心工具（日期计算、日程查询、冲突检测）和 ReAct 专用工具
+ * （资源检查、意图分类、通知发送）统一注册到全局 toolRegistry。
+ * 在应用启动时由 toolRegistry.ts 自动调用。
+ */
+
 import { toolRegistry } from '../services/react/toolRegistry'
 import { dateCalculatorTool, scheduleQueryTool, conflictDetectorTool } from './coreTools'
 import { resourceCheckerTool, intentClassifierTool } from './reactTools'

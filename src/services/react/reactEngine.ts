@@ -58,6 +58,12 @@ function tryQuickSkillMatch(query: string, currentDate: string): QuickMatchResul
     { pattern: /出差|差旅|飞.*去|前往.*出差/, skill: 'apply_business_trip' }
   ]
   
+  // 修改日程相关关键词
+  const editPatterns = [
+    { pattern: /修改.*日程|调整.*日程|编辑.*日程|更改.*日程|改.*日程/, skill: 'edit_schedule' },
+    { pattern: /改一下.*时间|调整.*时间|日程.*修改|日程.*调整/, skill: 'edit_schedule' }
+  ]
+  
   // 尝试匹配会议
   for (const { pattern, skill } of meetingPatterns) {
     if (pattern.test(normalizedQuery)) {
@@ -93,6 +99,18 @@ function tryQuickSkillMatch(query: string, currentDate: string): QuickMatchResul
           to: fromToMatch ? (fromToMatch[2] || fromToMatch[4]) : undefined,
           startDate: currentDate
         }
+      }
+    }
+  }
+  
+  // 尝试匹配修改日程（放在出差之后，避免"调整出差日程"误匹配）
+  for (const { pattern, skill } of editPatterns) {
+    if (pattern.test(normalizedQuery)) {
+      return {
+        matched: true,
+        skillName: skill,
+        action: 'open_schedule_list',
+        params: {}
       }
     }
   }
@@ -440,25 +458,6 @@ export class ReActEngine {
   // ==================== 辅助方法 ====================
 
   /**
-   * JSON 解析辅助
-   */
-  private parseJSON<T>(response: string): T | null {
-    try {
-      const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/)
-      let jsonStr = (jsonMatch && jsonMatch[1]) ? jsonMatch[1] : response
-      if (!jsonStr) return null
-      const jsonStart = jsonStr.indexOf('{')
-      const jsonEnd = jsonStr.lastIndexOf('}')
-      if (jsonStart === -1 || jsonEnd === -1) return null
-      jsonStr = jsonStr.slice(jsonStart, jsonEnd + 1)
-      return JSON.parse(jsonStr) as T
-    } catch {
-      this.log('JSON 解析失败')
-      return null
-    }
-  }
-
-  /**
    * 尝试从响应中提取最终答案
    */
   private extractFinalAnswer(response: string): string | null {
@@ -518,16 +517,4 @@ export function createReActEngine(
   config?: Partial<ReActConfig>
 ): ReActEngine {
   return new ReActEngine(llmConfig, config)
-}
-
-// ==================== 状态管理集成 ====================
-
-/**
- * 将ReAct引擎与大脑状态集成
- */
-export function integrateWithBrain(
-  _engine: ReActEngine,
-  _brainState: BrainState
-): void {
-  // 可以在这里添加状态同步逻辑
 }

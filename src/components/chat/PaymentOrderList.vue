@@ -1,8 +1,8 @@
 <template>
   <div class="payment-order-card">
     <div class="order-header">
-      <i class="fa-solid fa-credit-card text-blue-500"></i>
-      <span class="header-text">待支付订单清单</span>
+      <i class="fa-solid fa-credit-card" :class="allPaid ? 'text-green-500' : 'text-blue-500'"></i>
+      <span class="header-text">{{ allPaid ? '订单已支付' : '待支付订单清单' }}</span>
       <span class="order-count">{{ orders.length }}个订单</span>
     </div>
     
@@ -31,20 +31,31 @@
         </div>
         
         <div class="order-actions">
-          <button 
-            v-if="order.status === 'pending'"
-            @click="handlePay(order)"
-            class="pay-button"
-          >
-            <i class="fa-solid fa-credit-card"></i>
-            去支付
-          </button>
-          <span v-else-if="order.status === 'paid'" class="status-badge paid">
+          <span v-if="order.status === 'paid'" class="status-badge paid">
             <i class="fa-solid fa-check"></i> 已支付
           </span>
-          <span v-else class="status-badge cancelled">
+          <span v-else-if="order.status === 'cancelled'" class="status-badge cancelled">
             <i class="fa-solid fa-ban"></i> 已取消
           </span>
+          <span v-else-if="paying" class="status-badge processing">
+            <i class="fa-solid fa-spinner fa-spin"></i> 支付中
+          </span>
+          <div v-else class="action-buttons">
+            <button 
+              @click="handleChange(order)"
+              class="change-button"
+            >
+              <i class="fa-solid fa-arrows-rotate"></i>
+              换一个
+            </button>
+            <button 
+              @click="handlePay(order)"
+              class="pay-button"
+            >
+              <i class="fa-solid fa-credit-card"></i>
+              去支付
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -54,8 +65,18 @@
         <span class="total-label">总金额：</span>
         <span class="total-price">¥{{ totalAmount }}</span>
       </div>
+      <!-- 支付中 -->
+      <div v-if="paying" class="pay-all-button paying-state">
+        <i class="fa-solid fa-spinner fa-spin"></i>
+        支付处理中...
+      </div>
+      <!-- 全部已支付 -->
+      <div v-else-if="allPaid" class="status-badge paid" style="font-size: 14px; padding: 10px 20px;">
+        <i class="fa-solid fa-circle-check"></i> 全部已支付
+      </div>
+      <!-- 可支付 -->
       <button 
-        v-if="hasUnpaidOrders"
+        v-else-if="hasUnpaidOrders"
         @click="handlePayAll"
         class="pay-all-button"
       >
@@ -67,31 +88,42 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { PaymentOrderData } from '../../types/message'
 
 const props = defineProps<{
   data: PaymentOrderData
 }>()
 
+const emit = defineEmits<{
+  payAll: [data: PaymentOrderData]
+  changeOrder: [orderId: string, orderType: 'flight' | 'hotel', data: PaymentOrderData]
+}>()
+
+const paying = ref(false)
+
 const orders = computed(() => props.data.orders)
 const totalAmount = computed(() => props.data.totalAmount)
 const hasUnpaidOrders = computed(() => 
   props.data.orders.some(o => o.status === 'pending')
 )
+const allPaid = computed(() =>
+  props.data.orders.length > 0 && props.data.orders.every(o => o.status === 'paid')
+)
 
 const handlePay = (order: typeof props.data.orders[0]) => {
-  // 打开支付链接
-  window.open(order.paymentUrl, '_blank')
+  // 单项支付也走全部支付流程
+  emit('payAll', props.data)
+}
+
+const handleChange = (order: typeof props.data.orders[0]) => {
+  emit('changeOrder', order.id, order.type, props.data)
 }
 
 const handlePayAll = () => {
-  // 批量打开所有待支付订单的支付链接
-  props.data.orders
-    .filter(o => o.status === 'pending')
-    .forEach(order => {
-      window.open(order.paymentUrl, '_blank')
-    })
+  if (paying.value) return
+  paying.value = true
+  emit('payAll', props.data)
 }
 </script>
 
@@ -213,6 +245,32 @@ const handlePayAll = () => {
   flex-shrink: 0;
 }
 
+.action-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.change-button {
+  padding: 8px 12px;
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s;
+}
+
+.change-button:hover {
+  background: #e5e7eb;
+  border-color: #9ca3af;
+  color: #374151;
+}
+
 .pay-button {
   padding: 8px 16px;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -255,6 +313,17 @@ const handlePayAll = () => {
 .status-badge.cancelled {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.status-badge.processing {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.paying-state {
+  cursor: default;
+  opacity: 0.8;
+  background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%) !important;
 }
 
 .order-footer {

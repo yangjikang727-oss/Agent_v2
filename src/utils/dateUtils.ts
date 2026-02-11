@@ -1,4 +1,11 @@
 /**
+ * 日期/时间工具函数
+ * 
+ * 提供时间轴布局计算、时间格式化、相对日期解析等通用方法，
+ * 被时间轴组件(TimelineView)、冲突检测(scheduleStore)等模块共享使用。
+ */
+
+/**
  * 获取星期几
  */
 export function getWeekDay(date: string): string {

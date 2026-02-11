@@ -1,3 +1,11 @@
+/**
+ * ReAct 专用工具集
+ * 
+ * 提供 ReAct 引擎特有的扩展工具：
+ * - resource_checker: 会议室/车辆/设备资源可用性检查（模拟数据）
+ * - intent_classifier: 基于规则的意图分类和实体提取
+ */
+
 import type { Tool, ToolContext, ToolResult } from '../services/react/toolRegistry'
 
 /**
@@ -166,7 +174,7 @@ function simpleHash(str: string): number {
 }
 
 /**
- * 获取模拟资源数据
+ * 获取模拟资源数据（按类型返回预设列表）
  */
 function getMockResources(type: string) {
   const resources: Record<string, any[]> = {
@@ -189,7 +197,7 @@ function getMockResources(type: string) {
 }
 
 /**
- * 检测主要意图
+ * 检测用户输入的主要意图（基于关键词匹配）
  */
 function detectPrimaryIntent(input: string): string {
   const inputLower = input.toLowerCase()
@@ -211,7 +219,7 @@ function detectPrimaryIntent(input: string): string {
 }
 
 /**
- * 提取关键信息
+ * 从用户输入中提取时间、日期等关键信息
  */
 function extractKeyInfo(input: string): Record<string, any> {
   const info: Record<string, any> = {}
@@ -243,7 +251,7 @@ function extractKeyInfo(input: string): Record<string, any> {
 }
 
 /**
- * 提取实体
+ * 从文本中提取人名等实体（简易中文人名匹配）
  */
 function extractEntities(input: string): any[] {
   const entities: any[] = []
