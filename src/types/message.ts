@@ -235,6 +235,7 @@ export interface ConflictResolutionData {
   userAction: 'pending' | 'accepted' | 'cancelled' | 'show_more'  // 用户操作状态
   adjustTarget: 'pending' | 'existing' | 'new'  // 调整目标：pending=等待选择, existing=调整原日程, new=调整新日程
   existingScheduleId?: string       // 冲突的原日程 ID（用于调整原日程时更新）
+  noSlotsMessage?: string           // 无可用时段时的提示信息（有值时进入 noSlots 状态）
 }
 
 // 日程查询结果中的日程项

@@ -134,7 +134,7 @@ function isHotelList(msg: Message): msg is Message & { data: HotelListData } {
 }
 
 function isTripApplication(msg: Message): msg is Message & { data: TripApplicationData } {
-  return msg.type === 'trip_application' && msg.data !== null && 'reason' in (msg.data as object)
+  return msg.type === 'trip_application' && msg.data !== null && 'status' in (msg.data as object)
 }
 
 function isNotifyOption(msg: Message): msg is Message & { data: NotifyOptionData } {

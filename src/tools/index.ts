@@ -7,7 +7,7 @@
  */
 
 import { toolRegistry } from '../services/react/toolRegistry'
-import { dateCalculatorTool, scheduleQueryTool, conflictDetectorTool, cancelScheduleTool, editScheduleTool } from './coreTools'
+import { loadSkillTool, triggerActionTool, dateCalculatorTool, scheduleQueryTool, conflictDetectorTool, cancelScheduleTool, editScheduleTool } from './coreTools'
 import { resourceCheckerTool, intentClassifierTool } from './reactTools'
 import { notificationSenderTool } from './notificationTool'
 
@@ -15,6 +15,10 @@ import { notificationSenderTool } from './notificationTool'
  * 注册所有核心工具
  */
 export function registerCoreTools(): void {
+  // 注册 OpenCode 式 Skill 工具
+  toolRegistry.registerTool(loadSkillTool)
+  toolRegistry.registerTool(triggerActionTool)
+  
   // 注册日期计算器工具
   toolRegistry.registerTool(dateCalculatorTool)
   
@@ -43,6 +47,8 @@ export function registerCoreTools(): void {
  */
 export function getRegisteredCoreTools(): string[] {
   return [
+    loadSkillTool.name,
+    triggerActionTool.name,
     dateCalculatorTool.name,
     scheduleQueryTool.name,
     conflictDetectorTool.name,

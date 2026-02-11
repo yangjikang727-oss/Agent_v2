@@ -2,6 +2,8 @@
  * 核心工具集
  * 
  * 提供 ReAct 引擎可调用的基础工具：
+ * - load_skill: 按名称懒加载技能指令（OpenCode 式 Skill 即 Tool）
+ * - trigger_action: 通用 UI 动作触发器
  * - date_calculator: 相对日期表达式解析（今天/明天/下周X）
  * - schedule_query: 按日期/关键词查询日程
  * - conflict_detector: 时间段冲突检测
@@ -10,6 +12,120 @@
 import type { Tool, ToolContext, ToolResult } from '../services/react/toolRegistry'
 import type { Schedule } from '../types'
 import { timeToMinutes } from '../utils/dateUtils'
+import { skillStore } from '../services/react/skills/skillStore'
+
+// ==================== OpenCode 式 Skill 工具 ====================
+
+/**
+ * load_skill 工具 - 按名称懒加载技能的完整指令
+ * 
+ * OpenCode 核心机制：Agent 在系统提示中看到可用技能列表（name + description），
+ * 当识别到用户意图可能匹配某个技能时，调用此工具获取完整操作指南，
+ * 然后按指令中的步骤执行后续动作。
+ */
+export const loadSkillTool: Tool = {
+  name: 'load_skill',
+  description: '加载技能的完整操作指令。当识别到用户意图匹配某个技能时，必须先调用此工具获取详细操作步骤和参数说明，然后按指令执行',
+  category: 'utility',
+  parameters: [
+    {
+      name: 'name',
+      type: 'string',
+      description: '技能名称（从可用技能列表中选择）',
+      required: true
+    }
+  ],
+  execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
+    try {
+      const { name } = params as { name: string }
+      
+      if (!name) {
+        return { success: false, error: '缺少技能名称参数' }
+      }
+
+      // 确保 skillStore 已初始化
+      skillStore.loadAllSkills()
+
+      const skill = skillStore.getSkill(name)
+      if (!skill) {
+        const stats = skillStore.getStats()
+        return {
+          success: false,
+          error: `技能 "${name}" 不存在。可用技能: ${stats.names.join(', ')}`
+        }
+      }
+
+      // 返回纯文本格式的技能指令，让 LLM 直接阅读（而非 JSON 嵌套）
+      const instructionText = [
+        `技能: ${name}`,
+        `动作: ${skill.metadata.action}`,
+        `说明: ${skill.metadata.description}`,
+        '',
+        skill.instruction.instructions
+      ].join('\n')
+
+      return {
+        success: true,
+        data: instructionText
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: `加载技能失败: ${(error as Error).message}`
+      }
+    }
+  }
+}
+
+/**
+ * trigger_action 工具 - 通用 UI 动作触发器
+ * 
+ * Agent 阅读技能指令后，调用此工具触发对应的 UI 动作（如打开会议表单、出差申请表单）。
+ * 参数由 Agent 根据技能指令中的参数说明 + 用户输入自主提取。
+ */
+export const triggerActionTool: Tool = {
+  name: 'trigger_action',
+  description: '触发UI动作。阅读 load_skill 返回的技能指令后，调用此工具执行动作（如打开会议创建表单、出差申请表单等），并传入从用户输入中提取的参数',
+  category: 'utility',
+  parameters: [
+    {
+      name: 'action',
+      type: 'string',
+      description: '动作名称（从技能指令中获取，如 open_create_meeting_modal、open_trip_application_modal）',
+      required: true
+    },
+    {
+      name: 'params',
+      type: 'object',
+      description: '动作参数（根据技能指令中的参数说明，从用户输入中提取）',
+      required: false
+    }
+  ],
+  execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
+    try {
+      const { action, params: actionParams } = params as { action: string; params?: Record<string, any> }
+      
+      if (!action) {
+        return { success: false, error: '缺少动作名称参数' }
+      }
+
+      return {
+        success: true,
+        data: {
+          action,
+          params: actionParams || {},
+          taskId: `SKILL-${Date.now()}`,
+          message: `已触发动作: ${action}`
+        }
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: `触发动作失败: ${(error as Error).message}`
+      }
+    }
+  }
+}
 
 /**
  * 日期计算器工具

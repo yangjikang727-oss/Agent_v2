@@ -369,13 +369,47 @@ async function processInputWithReAct(text: string) {
           logger.info('App/ReAct', '→ 触发会议创建表单')
           logger.debug('App/ReAct', '表单数据:', createMeetingStep.actionInput.formData)
           const formData = createMeetingStep.actionInput.formData || {}
+          
+          // 合并 date + startTime/endTime 为 datetime-local 格式
+          const dateStr = formData.date || new Date().toISOString().split('T')[0]
+          let startTimeLocal = formData.startTime || ''
+          let endTimeLocal = formData.endTime || ''
+          
+          // 如果 startTime 是纯时间格式 (HH:mm)，与 date 合并为 datetime-local
+          if (startTimeLocal && !startTimeLocal.includes('T') && dateStr) {
+            startTimeLocal = `${dateStr}T${startTimeLocal}`
+          }
+          
+          // endTime 同理
+          if (endTimeLocal && !endTimeLocal.includes('T') && dateStr) {
+            endTimeLocal = `${dateStr}T${endTimeLocal}`
+          }
+          
+          // 如果有 startTime 但没有 endTime，默认 +1 小时
+          if (startTimeLocal && !endTimeLocal) {
+            const startDate = new Date(startTimeLocal)
+            if (!isNaN(startDate.getTime())) {
+              startDate.setHours(startDate.getHours() + 1)
+              const pad = (n: number) => String(n).padStart(2, '0')
+              endTimeLocal = `${startDate.getFullYear()}-${pad(startDate.getMonth() + 1)}-${pad(startDate.getDate())}T${pad(startDate.getHours())}:${pad(startDate.getMinutes())}`
+            }
+          }
+          
+          // attendees 归一化：如果是字符串，尝试拆分为数组
+          let attendees: string[] = []
+          if (Array.isArray(formData.attendees)) {
+            attendees = formData.attendees
+          } else if (typeof formData.attendees === 'string' && formData.attendees) {
+            attendees = formData.attendees.split(/[,，、\s]+/).filter(Boolean)
+          }
+          
           messageStore.addDataMessage('create_meeting', '', {
             title: formData.title || '',
-            startTime: formData.startTime || '',
-            endTime: formData.endTime || '',
+            startTime: startTimeLocal,
+            endTime: endTimeLocal,
             location: formData.location || '',
             roomType: formData.roomType || '',
-            attendees: formData.attendees || [],
+            attendees,
             remarks: formData.remarks || '',
             status: 'draft'
           } as import('./types').CreateMeetingData)
@@ -2183,14 +2217,18 @@ function handleConflictAdjustTarget(target: 'existing' | 'new', data: ConflictRe
       return
     }
 
-    // 兜底：无可用时段
-    conflictData.userAction = 'cancelled'
-    messageStore.addSystemMessage(
-      `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
-        <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
-        <div class="text-sm text-gray-700">今明两个工作日均无法容纳该时长的日程，请手动选择其他日期。</div>
-      </div>`
-    )
+    // 兜底：无可用时段（显示带操作按钮的卡片）
+    messageStore.addDataMessage('conflict_resolution', '', {
+      conflictInfo: data.conflictInfo,
+      availableSlots: [],
+      originalCtx: data.originalCtx,
+      isNextDay: false,
+      selectedIndex: null,
+      userAction: 'pending',
+      adjustTarget: data.adjustTarget,
+      existingScheduleId: data.existingScheduleId,
+      noSlotsMessage: '今明两个工作日均无法容纳该时长的日程,请选择其他日期。'
+    } as ConflictResolutionData)
   } else {
     // ========== 调整原日程：为冲突的已有日程查找可用时段 ==========
     const existingSchedule = data.existingScheduleId ? scheduleStore.getSchedule(data.existingScheduleId) : null
@@ -2251,14 +2289,18 @@ function handleConflictAdjustTarget(target: 'existing' | 'new', data: ConflictRe
       return
     }
 
-    // 兜底：无可用时段
-    conflictData.userAction = 'cancelled'
-    messageStore.addSystemMessage(
-      `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
-        <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
-        <div class="text-sm text-gray-700">原日程「${existingSchedule.content}」今明两个工作日均无法容纳该时长，请手动调整。</div>
-      </div>`
-    )
+    // 兜底：无可用时段（显示带操作按钮的卡片）
+    messageStore.addDataMessage('conflict_resolution', '', {
+      conflictInfo: data.conflictInfo,
+      availableSlots: [],
+      originalCtx: data.originalCtx,
+      isNextDay: false,
+      selectedIndex: null,
+      userAction: 'pending',
+      adjustTarget: data.adjustTarget,
+      existingScheduleId: data.existingScheduleId,
+      noSlotsMessage: `原日程「${existingSchedule.content}」今明两个工作日均无法容纳该时长,请选择其他日期。`
+    } as ConflictResolutionData)
   }
 }
 
@@ -2475,12 +2517,17 @@ async function handleConflictCustomDate(targetDate: string, data: ConflictResolu
         existingScheduleId: data.existingScheduleId
       } as ConflictResolutionData)
     } else {
-      messageStore.addSystemMessage(
-        `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
-          <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
-          <div class="text-sm text-gray-700">${dateLabel} 无法容纳原日程「${existingSchedule.content}」的时长，请选择其他日期。</div>
-        </div>`
-      )
+      messageStore.addDataMessage('conflict_resolution', '', {
+        conflictInfo: { content: data.conflictInfo.content, startTime: data.conflictInfo.startTime, endTime: data.conflictInfo.endTime },
+        availableSlots: [],
+        originalCtx: { ...ctx },
+        isNextDay: targetDate !== todayStr,
+        selectedIndex: null,
+        userAction: 'pending',
+        adjustTarget: 'existing',
+        existingScheduleId: data.existingScheduleId,
+        noSlotsMessage: `${dateLabel} 无法容纳原日程「${existingSchedule.content}」的时长,请选择其他日期。`
+      } as ConflictResolutionData)
     }
     return
   }
@@ -2520,12 +2567,17 @@ async function handleConflictCustomDate(targetDate: string, data: ConflictResolu
       existingScheduleId: data.existingScheduleId
     } as ConflictResolutionData)
   } else {
-    messageStore.addSystemMessage(
-      `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
-        <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
-        <div class="text-sm text-gray-700">${dateLabel} 无法容纳该时长的日程，请选择其他日期。</div>
-      </div>`
-    )
+    messageStore.addDataMessage('conflict_resolution', '', {
+      conflictInfo: { content: newDateConflict.content, startTime: newDateConflict.startTime, endTime: newDateConflict.endTime },
+      availableSlots: [],
+      originalCtx: { ...ctx, date: targetDate },
+      isNextDay: targetDate !== todayStr,
+      selectedIndex: null,
+      userAction: 'pending',
+      adjustTarget: data.adjustTarget,
+      existingScheduleId: data.existingScheduleId,
+      noSlotsMessage: `${dateLabel} 无法容纳该时长的日程,请选择其他日期。`
+    } as ConflictResolutionData)
   }
 }
 

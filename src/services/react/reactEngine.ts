@@ -11,6 +11,7 @@ import type { LLMConfig } from '../core/llmCore'
 import { callLLMRawChat } from '../core/llmCore'
 import { toolRegistry, type ToolContext, type ToolResult } from './toolRegistry'
 import { REACT_PROMPTS, parseReActResponse, formatObservation, type ReActStep } from './reactPrompts'
+import { skillStore } from './skills/skillStore'
 import type { BrainState } from '../../types'
 
 // ==================== ReAct引擎配置 ====================
@@ -24,7 +25,7 @@ export interface ReActConfig {
 }
 
 const DEFAULT_CONFIG: ReActConfig = {
-  maxSteps: 3,           // 单轮识别模式，无需多轮推理
+  maxSteps: 5,           // OpenCode 模式需要多步：load_skill → trigger_action
   maxRetries: 2,
   timeout: 20000,
   enableLogging: true,
@@ -274,14 +275,17 @@ export class ReActEngine {
       this.log('[ReAct] 开始推理循环（单轮识别模式）')
       
       const toolsSummary = toolRegistry.getToolsSummary()
+      const availableSkills = skillStore.getMetadataSummary()
       
       // 构建单轮对话 messages 数组
       const messages: Array<{role: string, content: string}> = [
-        { role: 'system', content: REACT_PROMPTS.SYSTEM(toolsSummary, context.currentDate) },
+        { role: 'system', content: REACT_PROMPTS.SYSTEM(toolsSummary, context.currentDate, availableSkills) },
         { role: 'user', content: `用户请求：${query}` }
       ]
       
       let toolNotFoundCount = 0  // 连续工具未找到计数器
+      let loadedSkillAction: string | undefined  // 追踪 load_skill 加载的技能 action
+      let triggerActionCalled = false  // 追踪 trigger_action 是否被调用
       
       for (let step = 0; step < this.config.maxSteps; step++) {
         this.log(`[Step ${step + 1}] 发送 ${messages.length} 条消息到 LLM`)
@@ -298,6 +302,26 @@ export class ReActEngine {
         
         if (parsedStep.finalAnswer) {
           this.log('获得最终答案')
+          
+          // ===== 兜底：load_skill 成功但 LLM 未调用 trigger_action =====
+          // LLM 可能在 load_skill 后直接输出 Final Answer 而不调用 trigger_action
+          // 此时应自动使用加载的技能 action + 关键字匹配提取的参数来弹出表单
+          if (loadedSkillAction && !triggerActionCalled) {
+            this.log(`[ReAct] ⚠ load_skill 已加载 action="${loadedSkillAction}" 但 LLM 未调用 trigger_action，执行自动兜底`)
+            const quickMatch = tryQuickSkillMatch(query, context.currentDate)
+            const fallbackStep: ReActStep = {
+              thought: `LLM 未调用 trigger_action，自动兜底触发 ${loadedSkillAction}`,
+              action: loadedSkillAction,
+              actionInput: {
+                formData: quickMatch.matched ? quickMatch.params : {},
+                taskId: `SKILL-FALLBACK-${Date.now()}`
+              },
+              observation: '已通过 load_skill 兜底自动触发'
+            }
+            steps.push(fallbackStep)
+            return { finalAnswer: ' ', steps, success: true }
+          }
+          
           return { finalAnswer: parsedStep.finalAnswer, steps, success: true }
         }
         
@@ -348,13 +372,26 @@ export class ReActEngine {
             steps[lastIndex].observation = observation
           }
           
-          // 检查是否是 Skill 工具（返回的 data 中包含 action 字段）
-          if (toolResult.success && toolResult.data && toolResult.data.action) {
-            this.log(`✔ 检测到 Skill 工具触发 UI 动作: ${toolResult.data.action}`)
+          // 追踪 load_skill 调用：记录加载的技能 action
+          if (parsedStep.action === 'load_skill' && toolResult.success) {
+            const skillName = parsedStep.actionInput?.name
+            if (skillName) {
+              const action = skillStore.getAction(skillName)
+              if (action) {
+                loadedSkillAction = action
+                this.log(`[ReAct] 已加载技能 "${skillName}"，action="${action}"`)
+              }
+            }
+          }
+          
+          // 检查 trigger_action 工具：返回的 data 中包含 action 字段
+          if (toolResult.success && toolResult.data && toolResult.data.action && parsedStep.action === 'trigger_action') {
+            triggerActionCalled = true
+            this.log(`✔ trigger_action 触发 UI 动作: ${toolResult.data.action}`)
             
-            // 构建包含 UI动作的 step
+            // 构建包含 UI 动作的 step，格式与 App.vue 检测逻辑兼容
             const uiActionStep: ReActStep = {
-              thought: `执行技能: ${toolResult.data.skillName}`,
+              thought: `触发动作: ${toolResult.data.action}`,
               action: toolResult.data.action,  // UI 动作名（如 open_create_meeting_modal）
               actionInput: {
                 formData: toolResult.data.params,  // 表单数据
@@ -379,6 +416,22 @@ export class ReActEngine {
         } else {
           const finalAnswer = this.extractFinalAnswer(response)
           if (finalAnswer) {
+            // ===== 兜底：load_skill 成功但 LLM 未调用 trigger_action =====
+            if (loadedSkillAction && !triggerActionCalled) {
+              this.log(`[ReAct] ⚠ extractFinalAnswer 兜底: load_skill action="${loadedSkillAction}" 未被 trigger_action 执行`)
+              const quickMatch = tryQuickSkillMatch(query, context.currentDate)
+              const fallbackStep: ReActStep = {
+                thought: `LLM 未调用 trigger_action，自动兜底触发 ${loadedSkillAction}`,
+                action: loadedSkillAction,
+                actionInput: {
+                  formData: quickMatch.matched ? quickMatch.params : {},
+                  taskId: `SKILL-FALLBACK-${Date.now()}`
+                },
+                observation: '已通过 load_skill 兜底自动触发'
+              }
+              steps.push(fallbackStep)
+              return { finalAnswer: ' ', steps, success: true }
+            }
             return { finalAnswer, steps, success: true }
           }
           
@@ -388,7 +441,24 @@ export class ReActEngine {
         }
       }
       
-      // ==================== 兜底：关键字快速匹配 ====================
+      // ==================== 兜底1：load_skill 已加载但未 trigger_action ====================
+      if (loadedSkillAction && !triggerActionCalled) {
+        this.log(`[ReAct] maxSteps 兜底: load_skill action="${loadedSkillAction}" 未被执行`)
+        const quickMatch = tryQuickSkillMatch(query, context.currentDate)
+        const fallbackStep: ReActStep = {
+          thought: `maxSteps耗尽，自动兜底触发 ${loadedSkillAction}`,
+          action: loadedSkillAction,
+          actionInput: {
+            formData: quickMatch.matched ? quickMatch.params : {},
+            taskId: `SKILL-FALLBACK-${Date.now()}`
+          },
+          observation: '已通过 load_skill 兜底自动触发'
+        }
+        steps.push(fallbackStep)
+        return { finalAnswer: ' ', steps, success: true }
+      }
+      
+      // ==================== 兜底2：关键字快速匹配 ====================
       // 当 ReAct 循环未能成功处理时，使用关键字匹配兜底
       if (this.config.enableQuickMatch) {
         this.log('[ReAct] ReAct循环未返回结果，尝试关键字兜底匹配')
