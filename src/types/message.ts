@@ -28,6 +28,9 @@ export type MessageType =
   | 'payment_order'       // 待支付订单
   | 'conflict_resolution' // 冲突解决推荐时段
   | 'schedule_query_result' // 日程查询结果
+  | 'create_meeting'        // 会议创建表单
+  | 'cancel_confirm'        // 取消日程确认
+  | 'edit_confirm'          // 修改日程确认
 
 // 交通选项
 export interface TransportOption {
@@ -226,10 +229,12 @@ export interface ConflictResolutionData {
     startTime: string
     endTime: string
   }>
-  originalCtx: Record<string, any>  // 原始创建上下文
+  originalCtx: Record<string, any>  // 原始创建上下文（新日程）
   isNextDay: boolean                // 是否为跨日推荐
   selectedIndex: number | null      // 已选中的时段索引
   userAction: 'pending' | 'accepted' | 'cancelled' | 'show_more'  // 用户操作状态
+  adjustTarget: 'pending' | 'existing' | 'new'  // 调整目标：pending=等待选择, existing=调整原日程, new=调整新日程
+  existingScheduleId?: string       // 冲突的原日程 ID（用于调整原日程时更新）
 }
 
 // 日程查询结果中的日程项
@@ -247,6 +252,18 @@ export interface ScheduleQueryItem {
   meta?: Record<string, any>
 }
 
+// 会议创建表单数据
+export interface CreateMeetingData {
+  title: string
+  startTime: string       // datetime-local 格式
+  endTime: string
+  location: string
+  roomType: string
+  attendees: string[]
+  remarks: string
+  status: 'draft' | 'submitted'  // draft=可编辑, submitted=锁定
+}
+
 // 日程查询结果数据
 export interface ScheduleQueryResultData {
   queryDate?: string | null        // 查询日期
@@ -256,6 +273,22 @@ export interface ScheduleQueryResultData {
   schedules: ScheduleQueryItem[]   // 日程列表
 }
 
+// 取消日程确认数据
+export interface CancelConfirmData {
+  matchedSchedule: ScheduleQueryItem | null  // 系统匹配到的日程
+  allSchedules: ScheduleQueryItem[]          // 全部候选日程（用于重新选择）
+  userAction: 'pending' | 'cancelled' | 'kept'  // 用户操作状态
+  selectedId: string | null                  // 最终选中要取消的日程ID
+}
+
+// 修改日程确认数据
+export interface EditConfirmData {
+  matchedSchedule: ScheduleQueryItem | null  // 系统匹配到的日程
+  allSchedules: ScheduleQueryItem[]          // 全部候选日程（用于重新选择）
+  userAction: 'pending' | 'editing' | 'skipped'  // 用户操作状态
+  selectedId: string | null                  // 最终选中要修改的日程ID
+}
+
 // 消息
 export interface Message {
   id: number
@@ -263,5 +296,5 @@ export interface Message {
   type: MessageType
   content: string
   thoughts?: string[]
-  data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | PaymentOrderData | ConflictResolutionData | ScheduleQueryResultData | null
+  data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | PaymentOrderData | ConflictResolutionData | ScheduleQueryResultData | CreateMeetingData | CancelConfirmData | EditConfirmData | null
 }

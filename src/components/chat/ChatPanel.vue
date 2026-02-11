@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, watch } from 'vue'
-import type { Message, Task, ResourceCardData, TransportSelectorData, AttendeeTableData, TransportOption, ParamConfirmData, ScheduleListData, FlightListData, HotelListData, TripApplicationData, NotifyOptionData, Schedule, ConflictResolutionData, ScheduleQueryResultData } from '../../types'
+import type { Message, Task, ResourceCardData, TransportSelectorData, AttendeeTableData, TransportOption, ParamConfirmData, ScheduleListData, FlightListData, HotelListData, TripApplicationData, NotifyOptionData, Schedule, ConflictResolutionData, ScheduleQueryResultData, CreateMeetingData, CancelConfirmData, EditConfirmData } from '../../types'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import QuickChips from './QuickChips.vue'
@@ -17,6 +17,9 @@ import NotifyOption from './NotifyOption.vue'
 import PaymentOrderList from './PaymentOrderList.vue'
 import ConflictResolver from './ConflictResolver.vue'
 import ScheduleQueryResult from './ScheduleQueryResult.vue'
+import CreateMeetingForm from './CreateMeetingForm.vue'
+import CancelConfirm from './CancelConfirm.vue'
+import EditConfirm from './EditConfirm.vue'
 
 const props = defineProps<{
   messages: Message[]
@@ -62,8 +65,14 @@ const emit = defineEmits<{
   showMoreConflictSlots: [data: ConflictResolutionData, msgId: number]
   cancelConflict: [data: ConflictResolutionData, msgId: number]
   selectConflictCustomDate: [date: string, data: ConflictResolutionData, msgId: number]
+  selectConflictAdjustTarget: [target: 'existing' | 'new', data: ConflictResolutionData, msgId: number]
   payAll: [data: import('../../types/message').PaymentOrderData, msgId: number]
   changeOrder: [orderId: string, orderType: 'flight' | 'hotel', data: import('../../types/message').PaymentOrderData, msgId: number]
+  submitMeeting: [data: CreateMeetingData, msgId: number]
+  confirmCancelSchedule: [scheduleId: string, msgId: number]
+  reselectCancelSchedule: [scheduleId: string, msgId: number]
+  confirmEditSchedule: [scheduleId: string, msgId: number]
+  reselectEditSchedule: [scheduleId: string, msgId: number]
 }>()
 
 const chatBoxRef = ref<HTMLElement | null>(null)
@@ -142,6 +151,18 @@ function isConflictResolution(msg: Message): msg is Message & { data: ConflictRe
 
 function isScheduleQueryResult(msg: Message): msg is Message & { data: ScheduleQueryResultData } {
   return msg.type === 'schedule_query_result' && msg.data !== null && 'schedules' in (msg.data as object) && 'summary' in (msg.data as object)
+}
+
+function isCreateMeeting(msg: Message): msg is Message & { data: CreateMeetingData } {
+  return msg.type === 'create_meeting' && msg.data !== null && 'title' in (msg.data as object) && 'status' in (msg.data as object)
+}
+
+function isCancelConfirm(msg: Message): msg is Message & { data: CancelConfirmData } {
+  return msg.type === 'cancel_confirm' && msg.data !== null && 'userAction' in (msg.data as object)
+}
+
+function isEditConfirm(msg: Message): msg is Message & { data: EditConfirmData } {
+  return msg.type === 'edit_confirm' && msg.data !== null && 'userAction' in (msg.data as object)
 }
 
 defineExpose({
@@ -308,12 +329,36 @@ defineExpose({
             @showMoreSlots="(data) => emit('showMoreConflictSlots', data, msg.id)"
             @cancelConflict="(data) => emit('cancelConflict', data, msg.id)"
             @selectCustomDate="(date, data) => emit('selectConflictCustomDate', date, data, msg.id)"
+            @selectAdjustTarget="(target, data) => emit('selectConflictAdjustTarget', target, data, msg.id)"
           />
 
           <!-- Schedule Query Result -->
           <ScheduleQueryResult
             v-if="isScheduleQueryResult(msg)"
             :data="msg.data"
+          />
+
+          <!-- Create Meeting Form -->
+          <CreateMeetingForm
+            v-if="isCreateMeeting(msg)"
+            :data="msg.data"
+            @submit="(data) => emit('submitMeeting', data, msg.id)"
+          />
+
+          <!-- Cancel Confirm -->
+          <CancelConfirm
+            v-if="isCancelConfirm(msg)"
+            :data="msg.data"
+            @confirm="(id) => emit('confirmCancelSchedule', id, msg.id)"
+            @reselect="(id) => emit('reselectCancelSchedule', id, msg.id)"
+          />
+
+          <!-- Edit Confirm -->
+          <EditConfirm
+            v-if="isEditConfirm(msg)"
+            :data="msg.data"
+            @confirm="(id) => emit('confirmEditSchedule', id, msg.id)"
+            @reselect="(id) => emit('reselectEditSchedule', id, msg.id)"
           />
         </ChatMessage>
       </TransitionGroup>
