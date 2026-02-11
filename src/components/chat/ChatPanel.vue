@@ -47,7 +47,7 @@ const emit = defineEmits<{
   confirmHotel: [hotelId: string, scheduleId: string, msgId: number]
   cancelHotel: [scheduleId: string, msgId: number]
   submitTripApplication: [data: TripApplicationData, msgId: number]
-  selectNotifyOption: [option: 'now' | 'before_1h', scheduleId: string, msgId: number]
+  selectNotifyOption: [option: 'now' | 'before_15min', scheduleId: string, msgId: number]
   skipNotify: [scheduleId: string, msgId: number]
   removeAttendee: [msgId: number, uid: string]
   restoreAttendee: [msgId: number, uid: string]

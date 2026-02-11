@@ -1,3 +1,10 @@
+/**
+ * 类型系统 - 统一导出入口
+ * 
+ * 导出所有业务数据模型、AI 状态类型、意图解析结构等。
+ * 外部模块统一通过 `import type { ... } from '../types'` 引用。
+ */
+
 // 导出所有类型
 export * from './schedule'
 export * from './task'

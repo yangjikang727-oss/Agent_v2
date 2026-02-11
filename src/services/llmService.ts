@@ -16,7 +16,6 @@ export {
   callLLM, 
   callLLMRaw,
   callLLMRawChat,
-  callGeminiLegacy,
   type LLMConfig, 
   type LLMProvider 
 } from './core/llmCore'

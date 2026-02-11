@@ -224,12 +224,39 @@ const initializeForm = () => {
     formData.endTime = props.initialData.endTime || ''
     formData.location = props.initialData.location || ''
     formData.roomType = props.initialData.roomType || ''
-    formData.attendees = [...(props.initialData.attendees || [])]
+    formData.attendees = normalizeAttendees(props.initialData.attendees)
     formData.remarks = props.initialData.remarks || ''
   }
   
   // 清空错误
   clearErrors()
+}
+
+/**
+ * 归一化参会人员列表
+ * 兼容 LLM 传入的多种格式：
+ * - 字符串: "杨继康，何珍珍，袁博文"
+ * - 单元素数组: ["杨继康，何珍珍，袁博文"]
+ * - 正常数组: ["杨继康", "何珍珍", "袁博文"]
+ */
+function normalizeAttendees(raw: any): string[] {
+  if (!raw) return []
+  
+  // 字符串 → 按常见分隔符拆分
+  if (typeof raw === 'string') {
+    return raw.split(/[,，、;\s]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+  }
+  
+  // 数组 → 对每个元素递归拆分（处理单元素包含多人的情况）
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item: any) =>
+      typeof item === 'string'
+        ? item.split(/[,，、;\s]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+        : [String(item)]
+    )
+  }
+  
+  return []
 }
 
 // 验证单个字段

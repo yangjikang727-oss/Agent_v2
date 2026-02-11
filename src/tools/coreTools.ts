@@ -1,3 +1,12 @@
+/**
+ * 核心工具集
+ * 
+ * 提供 ReAct 引擎可调用的基础工具：
+ * - date_calculator: 相对日期表达式解析（今天/明天/下周X）
+ * - schedule_query: 按日期/关键词查询日程
+ * - conflict_detector: 时间段冲突检测
+ */
+
 import type { Tool, ToolContext, ToolResult } from '../services/react/toolRegistry'
 import type { Schedule } from '../types'
 import { timeToMinutes } from '../utils/dateUtils'

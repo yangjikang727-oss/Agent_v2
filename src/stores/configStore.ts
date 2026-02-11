@@ -1,3 +1,12 @@
+/**
+ * 配置状态管理
+ * 
+ * 管理全局配置，包括：
+ * - LLM 服务配置（provider / apiKey / apiUrl / model）
+ * - 技能元数据列表（SkillMeta）
+ * - 场景配置列表（Scenario）及关键词匹配
+ */
+
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { SkillMeta, Scenario } from '../types'

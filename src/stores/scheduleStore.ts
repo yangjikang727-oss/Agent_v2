@@ -1,3 +1,13 @@
+/**
+ * 日程状态管理
+ * 
+ * 管理所有日程的 CRUD 操作，提供：
+ * - 当天日程过滤（含跨天行程支持）
+ * - 日期切换与导航
+ * - 时间冲突检测
+ * - 资源/参会人/议程的更新
+ */
+
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Schedule, Resource } from '../types'

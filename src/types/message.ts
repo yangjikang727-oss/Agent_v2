@@ -1,3 +1,10 @@
+/**
+ * 消息数据模型
+ * 
+ * 定义聊天面板中所有消息类型及其关联数据结构，包括：
+ * 文本消息、航班/酒店推荐列表、出差申请表单、通知选项、待支付订单等。
+ */
+
 import type { Task } from './task'
 import type { TransportMode, Schedule } from './schedule'
 
@@ -100,7 +107,7 @@ export interface NotifyOptionData {
   scheduleContent: string   // 会议主题
   meetingTime: string       // 会议时间
   attendees: string[]       // 参会人
-  selected: 'now' | 'before_1h' | null  // 选中的选项
+  selected: 'now' | 'before_15min' | null  // 选中的选项
   confirmed: boolean        // 是否已确认
 }
 

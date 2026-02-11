@@ -1,3 +1,13 @@
+/**
+ * 消息状态管理
+ * 
+ * 管理聊天面板的消息列表，支持：
+ * - 用户/系统消息的添加与更新
+ * - 带数据载荷的富消息（航班列表、通知选项等）
+ * - 参会人表格行的局部更新
+ * - 消息 ID 自增（避免同毫秒冲突）
+ */
+
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { Message, MessageType, AttendeeRow } from '../types'

@@ -45,6 +45,27 @@ import LogViewerModal from './components/modals/LogViewerModal.vue'
 import TripApplication from './components/chat/TripApplication.vue'
 import { TripFormManager } from './services/react/tripFormManager'
 
+// ==================== 工具函数 ====================
+
+/**
+ * 归一化参会人员列表
+ * 兼容 LLM 传入的多种格式：字符串 / 单元素数组 / 正常数组
+ */
+function normalizeAttendeeList(raw: any): string[] {
+  if (!raw) return []
+  if (typeof raw === 'string') {
+    return raw.split(/[,，、;\s]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+  }
+  if (Array.isArray(raw)) {
+    return raw.flatMap((item: any) =>
+      typeof item === 'string'
+        ? item.split(/[,，、;\s]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+        : [String(item)]
+    )
+  }
+  return []
+}
+
 // Stores
 const scheduleStore = useScheduleStore()
 const taskStore = useTaskStore()
@@ -169,22 +190,6 @@ async function createSchedule(ctx: {
     })
     taskStore.addTasks(newTasks)
     messageStore.addDataMessage('action_list', '✅ 已创建', newTasks, thoughts)
-
-    // 出差场景：在自动执行推荐类技能前先统一确认
-    const AUTO_EXECUTABLE_SKILLS = ['arrange_transport']
-    if ((ctx.scenarioCode || '') === 'TRIP') {
-      const autoTasks = newTasks.filter(task => AUTO_EXECUTABLE_SKILLS.includes(task.skill))
-      if (autoTasks.length > 0) {
-        brain.setMode('WAIT_AUTO_EXEC_CONFIRM')
-        brain.setDraft({
-          scheduleId: schedule.id,
-          autoExecTaskIds: autoTasks.map(t => t.id)
-        })
-        messageStore.addSystemMessage(
-        '已为你创建差旅日程，并生成交通安排等任务，需要我现在自动帮你跑一遍推荐吗？（回复“是”或“否”）'
-        )
-      }
-    }
   } else {
     messageStore.addSystemMessage('✅ 已创建', thoughts)
   }
@@ -351,6 +356,25 @@ async function processInputWithReAct(text: string) {
             status: 'draft'
           }
           showTripApplication.value = true
+          hasModalAction = true
+        }
+        
+        // 检查是否有修改日程的动作（复用传统模式的日程列表选择流程）
+        const editScheduleStep = result.steps.find(step => 
+          step.action === 'open_schedule_list'
+        )
+        if (editScheduleStep) {
+          logger.info('App/ReAct', '→ 触发修改日程列表')
+          const today: string = scheduleStore.systemCurrentDate || new Date().toISOString().split('T')[0] || ''
+          const futureSchedules = scheduleStore.schedules
+            .filter(s => s.date >= today)
+            .sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime))
+          
+          if (futureSchedules.length === 0) {
+            messageStore.addSystemMessage('暂无未来日程可修改。')
+          } else {
+            messageStore.addDataMessage('schedule_list', '请选择要修改的日程：', { schedules: futureSchedules } as ScheduleListData)
+          }
           hasModalAction = true
         }
       }
@@ -1088,7 +1112,7 @@ function handleConfirmResource(data: ResourceCardData, msgId: number) {
 /**
  * 处理通知选项选择
  */
-async function handleSelectNotifyOption(option: 'now' | 'before_1h', scheduleId: string, msgId: number) {
+async function handleSelectNotifyOption(option: 'now' | 'before_15min', scheduleId: string, msgId: number) {
   const msg = messageStore.getMessage(msgId)
   if (!msg || !msg.data) return
   
@@ -1103,7 +1127,8 @@ async function handleSelectNotifyOption(option: 'now' | 'before_1h', scheduleId:
   if (option === 'now') {
     // 立即执行通知参会人技能
     const names = schedule.attendees.map(n => n.split('(')[0]).join('、')
-    let location = '线上会议'
+    // 地点优先级：已锁定资源 > schedule.location > 线上会议
+    let location = schedule.location || '线上会议'
     const room = schedule.resources?.find(r => r.resourceType === 'room')
     if (room) location = room.name
     
@@ -1118,10 +1143,10 @@ async function handleSelectNotifyOption(option: 'now' | 'before_1h', scheduleId:
     if (notifyTask) {
       taskStore.completeTask(notifyTask.id)
     }
-  } else if (option === 'before_1h') {
-    // 设置定时通知（开会前1小时）
+  } else if (option === 'before_15min') {
+    // 设置定时通知（开会前15分钟）
     messageStore.addSystemMessage(
-      `⏰ 已设置定时通知，将在会议开始前 1 小时自动发送邀请。`
+      `⏰ 已设置定时通知，将在会议开始前 15 分钟自动发送邀请。`
     )
     
     // 完成通知参会人任务
@@ -1717,6 +1742,9 @@ function handleCreateMeetingSubmit(data: any) {
     ? data.endTime.split('T')[1] 
     : data.endTime
   
+  // 归一化参会人员列表（防御：兼容字符串/单元素数组等异常格式）
+  const attendees = normalizeAttendeeList(data.attendees)
+  
   // 创建会议日程
   const newSchedule: Schedule = {
     id: `sch_${Date.now()}`,
@@ -1727,11 +1755,11 @@ function handleCreateMeetingSubmit(data: any) {
     type: 'meeting',
     location: data.location,
     resources: [],
-    attendees: data.attendees,
+    attendees,
     agenda: data.remarks || '',
     meta: {
       location: data.location,
-      attendeeCount: data.attendees.length
+      attendeeCount: attendees.length
     }
   }
   
@@ -1772,16 +1800,16 @@ function handleCreateMeetingSubmit(data: any) {
   createMeetingData.value = {}
   
   // 如果有参会人员，询问是否立即通知
-  if (data.attendees && data.attendees.length > 0) {
+  if (attendees.length > 0) {
     logger.info('App/Meeting', '→ 检测到参会人员，准备询问通知')
-    logger.debug('App/Meeting', '参会人员列表:', data.attendees)
+    logger.debug('App/Meeting', '参会人员列表:', attendees)
     setTimeout(() => {
       logger.info('App/Meeting', '→ 弹出通知选项卡片')
       messageStore.addDataMessage('notify_option', '', {
         scheduleId: newSchedule.id,
         scheduleContent: data.title,
         meetingTime: `${newSchedule.startTime} - ${newSchedule.endTime}`,
-        attendees: data.attendees,
+        attendees,
         selected: null,
         confirmed: false
       } as import('./types').NotifyOptionData)
