@@ -7,7 +7,7 @@
  */
 
 import { toolRegistry } from '../services/react/toolRegistry'
-import { dateCalculatorTool, scheduleQueryTool, conflictDetectorTool } from './coreTools'
+import { dateCalculatorTool, scheduleQueryTool, conflictDetectorTool, cancelScheduleTool, editScheduleTool } from './coreTools'
 import { resourceCheckerTool, intentClassifierTool } from './reactTools'
 import { notificationSenderTool } from './notificationTool'
 
@@ -23,6 +23,12 @@ export function registerCoreTools(): void {
   
   // 注册冲突检测工具
   toolRegistry.registerTool(conflictDetectorTool)
+  
+  // 注册取消日程工具
+  toolRegistry.registerTool(cancelScheduleTool)
+  
+  // 注册修改日程工具
+  toolRegistry.registerTool(editScheduleTool)
   
   // 注册ReAct专用工具
   toolRegistry.registerTool(resourceCheckerTool)
@@ -40,6 +46,8 @@ export function getRegisteredCoreTools(): string[] {
     dateCalculatorTool.name,
     scheduleQueryTool.name,
     conflictDetectorTool.name,
+    cancelScheduleTool.name,
+    editScheduleTool.name,
     resourceCheckerTool.name,
     intentClassifierTool.name,
     notificationSenderTool.name
