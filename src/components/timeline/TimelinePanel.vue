@@ -5,6 +5,7 @@ import TimelineView from './TimelineView.vue'
 
 defineProps<{
   schedules: Schedule[]
+  currentDate?: string
 }>()
 
 const emit = defineEmits<{
@@ -45,6 +46,7 @@ defineExpose({
     <TimelineView 
       ref="timelineRef"
       :schedules="schedules"
+      :current-date="currentDate"
       @click-event="emit('clickEvent', $event)"
       @delete-event="emit('deleteEvent', $event)"
     />
