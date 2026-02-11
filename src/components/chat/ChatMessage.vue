@@ -19,7 +19,7 @@ defineProps<{
     <!-- Message Bubble -->
     <div 
       :class="[
-        'max-w-[90%] rounded-2xl p-4 text-sm shadow-sm transition-all leading-relaxed',
+        'max-w-[95%] rounded-2xl p-4 text-sm shadow-sm transition-all leading-relaxed',
         message.role === 'user' 
           ? 'bg-indigo-600 text-white rounded-br-none shadow-indigo-200' 
           : 'bg-white text-gray-700 border border-gray-100 rounded-bl-none'

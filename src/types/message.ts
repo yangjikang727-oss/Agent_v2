@@ -26,6 +26,8 @@ export type MessageType =
   | 'trip_application'    // 出差申请表单
   | 'notify_option'       // 通知参会人选项
   | 'payment_order'       // 待支付订单
+  | 'conflict_resolution' // 冲突解决推荐时段
+  | 'schedule_query_result' // 日程查询结果
 
 // 交通选项
 export interface TransportOption {
@@ -48,6 +50,12 @@ export interface FlightOption {
   tags?: string[]       // 标签：如 ["最便宜", "最快", "推荐"]
 }
 
+// 换单上下文（标记从支付清单发起的换单操作）
+export interface ChangeOrderContext {
+  paymentMsgId: number    // 支付清单所在消息 ID
+  orderId: string         // 要替换的订单项 ID
+}
+
 // 航班列表数据
 export interface FlightListData {
   scheduleId: string
@@ -58,6 +66,7 @@ export interface FlightListData {
   flights: FlightOption[]
   selected: string | null  // 选中的航班号
   locked: boolean
+  changeContext?: ChangeOrderContext  // 换单上下文
 }
 
 // 酒店选项数据
@@ -83,6 +92,7 @@ export interface HotelListData {
   hotels: HotelOption[]
   selected: string | null  // 选中的酒店ID
   locked: boolean
+  changeContext?: ChangeOrderContext  // 换单上下文
 }
 
 // 出差申请数据
@@ -199,6 +209,53 @@ export interface ScheduleListData {
   schedules: Schedule[]
 }
 
+// 冲突解决推荐时段数据
+export interface ConflictResolutionData {
+  conflictInfo: {
+    content: string
+    startTime: string
+    endTime: string
+  }
+  nearestSlot?: {                   // 就近推荐时段（第一层）
+    date: string
+    startTime: string
+    endTime: string
+  }
+  availableSlots: Array<{           // 全部可选时段（第二/三层）
+    date: string
+    startTime: string
+    endTime: string
+  }>
+  originalCtx: Record<string, any>  // 原始创建上下文
+  isNextDay: boolean                // 是否为跨日推荐
+  selectedIndex: number | null      // 已选中的时段索引
+  userAction: 'pending' | 'accepted' | 'cancelled' | 'show_more'  // 用户操作状态
+}
+
+// 日程查询结果中的日程项
+export interface ScheduleQueryItem {
+  id: string
+  date: string
+  startTime: string
+  endTime: string
+  endDate?: string
+  content: string
+  type: 'meeting' | 'trip' | 'general'
+  location?: string
+  attendees?: string[]
+  resources?: Array<{ id: string; name: string; icon: string; resourceType: string }>
+  meta?: Record<string, any>
+}
+
+// 日程查询结果数据
+export interface ScheduleQueryResultData {
+  queryDate?: string | null        // 查询日期
+  queryKeyword?: string | null     // 查询关键词
+  summary: string                  // LLM生成的摘要
+  totalCount: number               // 总结果数
+  schedules: ScheduleQueryItem[]   // 日程列表
+}
+
 // 消息
 export interface Message {
   id: number
@@ -206,5 +263,5 @@ export interface Message {
   type: MessageType
   content: string
   thoughts?: string[]
-  data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | PaymentOrderData | null
+  data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | PaymentOrderData | ConflictResolutionData | ScheduleQueryResultData | null
 }

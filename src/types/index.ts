@@ -21,6 +21,8 @@ export type BrainMode =
   | 'WAIT_HOTEL_LOCATION'  // 等待酒店商圈输入
   | 'CONFIRM_CONFLICT'
   | 'WAIT_AUTO_EXEC_CONFIRM'  // 等待自动执行推荐技能的确认
+  | 'WAIT_RECOMMEND_TRANSPORT_TIME'  // 等待用户输入出行时间偏好
+  | 'WAIT_RECOMMEND_HOTEL_LOC'       // 等待用户输入酒店商圈偏好
 
 // AI 大脑状态
 export interface BrainState {

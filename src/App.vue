@@ -10,6 +10,8 @@ import type {
   Resource,
   ParamConfirmData,
   ScheduleListData,
+  ConflictResolutionData,
+  ScheduleQueryResultData,
   IntentData,
   TransportMode,
   BrainMode
@@ -26,7 +28,7 @@ import { startNotificationService, stopNotificationService } from './services/no
 
 // Utils
 import { extractDate, extractTime, extractAttendees, extractTransport, detectScenarioType } from './utils/nlpUtils'
-import { getEndTime } from './utils/dateUtils'
+import { getEndTime, timeToMinutes } from './utils/dateUtils'
 import { logger } from './utils/logger'
 
 // Composables
@@ -162,39 +164,30 @@ async function createSchedule(ctx: {
     return
   }
   
+  // 切换日期视图到日程日期
+  if (schedule.date !== scheduleStore.currentDate) {
+    scheduleStore.setDate(schedule.date)
+  }
   timelineRef.value?.scrollToTime(ctx.startTime)
 
-  // 获取场景配置
-  const scenario = configStore.getScenario(ctx.scenarioCode || 'GENERAL')
-  const thoughts = [
-    `场景: ${scenario?.name || '普通'}`,
-    `创建: ${ctx.content}`,
-    `技能: ${scenario?.skills.join(', ') || '无'}`
-  ]
-
-  // 生成技能任务
-  if (scenario && scenario.skills.length > 0) {
-    const newTasks: Task[] = scenario.skills.map(skillCode => {
-      const skillMeta = configStore.getSkill(skillCode)
-      return {
-        id: crypto.randomUUID(),
-        scheduleId: schedule.id,
-        title: skillMeta?.name || skillCode,
-        desc: skillMeta?.description || '',
-        icon: skillMeta?.icon || 'fa-cube',
-        skill: skillCode,
-        actionBtn: '执行',
-        date: ctx.date,
-        status: 'pending'
-      }
-    })
-    taskStore.addTasks(newTasks)
-    messageStore.addDataMessage('action_list', '✅ 已创建', newTasks, thoughts)
-  } else {
-    messageStore.addSystemMessage('✅ 已创建', thoughts)
-  }
-
+  // 成功消息
+  const typeLabel = schedule.type === 'meeting' ? '会议' : '日程'
+  messageStore.addSystemMessage(`✅ ${typeLabel}创建成功：${ctx.content}`)
   brain.stopThinking()
+
+  // 会议日程：如果有参会人，弹出通知确认卡片
+  if (schedule.type === 'meeting' && ctx.attendees && ctx.attendees.length > 0) {
+    setTimeout(() => {
+      messageStore.addDataMessage('notify_option', '', {
+        scheduleId: schedule.id,
+        scheduleContent: ctx.content,
+        meetingTime: `${ctx.startTime} - ${ctx.endTime}`,
+        attendees: ctx.attendees,
+        selected: null,
+        confirmed: false
+      } as import('./types').NotifyOptionData)
+    }, 300)
+  }
 }
 
 // 执行工作流 (带冲突检测)
@@ -246,6 +239,107 @@ async function executeWorkflow(ctx: {
   }
 
   await createSchedule(ctx)
+}
+
+// ==================== 智能冲突解决 ====================
+
+/**
+ * 统一冲突解决函数（三层递进策略）
+ * 1. 智能就近安排：双向查找最近可用时段
+ * 2. 当天空闲时段推荐：快捷按钮选择
+ * 3. 下一个工作日推荐：跳过周末
+ */
+async function resolveConflictAndCreate(ctx: {
+  date: string
+  startTime: string
+  endTime: string
+  endDate?: string
+  content: string
+  scenarioCode?: string
+  location?: string
+  attendees?: string[]
+  transport?: string
+  from?: string
+  to?: string
+}) {
+  // 无冲突，直接创建
+  const conflict = scheduleStore.checkConflict(ctx.date, ctx.startTime, ctx.endTime)
+  if (!conflict) {
+    await createSchedule(ctx)
+    return
+  }
+
+  logger.info('App/Conflict', `检测到冲突: 新建 ${ctx.startTime}-${ctx.endTime} vs 「${conflict.content}」${conflict.startTime}-${conflict.endTime}`)
+
+  const duration = timeToMinutes(ctx.endTime) - timeToMinutes(ctx.startTime)
+  if (duration <= 0) {
+    messageStore.addSystemMessage('❌ 时间设置有误，结束时间必须晚于开始时间。')
+    return
+  }
+
+  // 计算当前时间（分钟），只推荐当前时间之后的时段
+  const now = new Date()
+  const todayStr = now.toISOString().split('T')[0]
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+  // 仅当日程安排在今天时，才限制最小起始时间
+  const minStartMin = ctx.date === todayStr ? nowMinutes : undefined
+
+  // 第一层：双向就近安排 → 展示推荐，等待用户确认
+  const nearest = scheduleStore.findNearestAvailableSlot(ctx.date, ctx.startTime, duration, undefined, minStartMin)
+  if (nearest) {
+    logger.info('App/Conflict', `就近推荐: ${nearest.start}-${nearest.end}，等待用户确认`)
+    // 同时获取当天所有空闲时段，用户拒绝推荐后可展示
+    const todaySlots = scheduleStore.findAvailableSlots(ctx.date, duration, undefined, minStartMin)
+    messageStore.addDataMessage('conflict_resolution', '', {
+      conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
+      nearestSlot: { date: ctx.date, startTime: nearest.start, endTime: nearest.end },
+      availableSlots: todaySlots.map(s => ({ date: ctx.date, startTime: s.start, endTime: s.end })),
+      originalCtx: { ...ctx },
+      isNextDay: false,
+      selectedIndex: null,
+      userAction: 'pending'
+    } as ConflictResolutionData)
+    return
+  }
+
+  // 第二层：当天空闲时段推荐
+  const todaySlots = scheduleStore.findAvailableSlots(ctx.date, duration, undefined, minStartMin)
+  if (todaySlots.length > 0) {
+    logger.info('App/Conflict', `当天找到 ${todaySlots.length} 个空闲时段`)
+    messageStore.addDataMessage('conflict_resolution', '', {
+      conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
+      availableSlots: todaySlots.map(s => ({ date: ctx.date, startTime: s.start, endTime: s.end })),
+      originalCtx: { ...ctx },
+      isNextDay: false,
+      selectedIndex: null,
+      userAction: 'pending'
+    } as ConflictResolutionData)
+    return
+  }
+
+  // 第三层：下一个工作日推荐
+  const nextDay = scheduleStore.getNextWorkday(ctx.date)
+  const nextDaySlots = scheduleStore.findAvailableSlots(nextDay, duration)
+  if (nextDaySlots.length > 0) {
+    logger.info('App/Conflict', `下一工作日 ${nextDay} 找到 ${nextDaySlots.length} 个空闲时段`)
+    messageStore.addDataMessage('conflict_resolution', '', {
+      conflictInfo: { content: conflict.content, startTime: conflict.startTime, endTime: conflict.endTime },
+      availableSlots: nextDaySlots.map(s => ({ date: nextDay, startTime: s.start, endTime: s.end })),
+      originalCtx: { ...ctx },
+      isNextDay: true,
+      selectedIndex: null,
+      userAction: 'pending'
+    } as ConflictResolutionData)
+    return
+  }
+
+  // 兜底：两个工作日均无可用时段
+  messageStore.addSystemMessage(
+    `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+      <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
+      <div class="text-sm text-gray-700">与「<b>${conflict.content}</b>」存在冲突，且今明两个工作日均无法容纳该时长的日程，请手动选择其他日期。</div>
+    </div>`
+  )
 }
 
 // 处理用户输入（ReAct模式）
@@ -379,8 +473,88 @@ async function processInputWithReAct(text: string) {
         }
       }
       
-      // 只有非弹窗场景且 finalAnswer 有内容时才添加消息
-      if (!hasModalAction && result.finalAnswer && result.finalAnswer.trim()) {
+      // 判断是否有工具调用（任一 step 有 action 且非 Final Answer）
+      const hadToolCall = result.steps.some(s => s.action && s.action !== 'Final Answer' && s.observation)
+      
+      // 检查是否有 schedule_query 工具调用 → 用结构化卡片展示
+      const scheduleQueryStep = result.steps.find(s => s.action === 'schedule_query' && s.observation)
+      
+      // 非日程意图 → 转入通用问答 LLM
+      if (!hasModalAction && !hadToolCall) {
+        logger.info('App/ReAct', '→ 未识别日程意图，转入通用问答')
+        brain.startThinking('思考中...')
+        try {
+          const { callLLMRawChat } = await import('./services/core/llmCore')
+          const { REACT_PROMPTS } = await import('./services/react/reactPrompts')
+          const currentDate = new Date().toISOString().split('T')[0] || ''
+          const chatMessages = [
+            { role: 'system', content: REACT_PROMPTS.GENERAL_CHAT(currentDate) },
+            { role: 'user', content: text }
+          ]
+          const chatReply = await callLLMRawChat(chatMessages, {
+            provider: configStore.llmProvider,
+            apiKey: configStore.llmApiKey,
+            apiUrl: configStore.llmApiUrl,
+            model: configStore.llmModel
+          })
+          const answer = chatReply?.trim() || '抱歉，我暂时无法回答这个问题。'
+          messageStore.addSystemMessage(answer)
+          contextManager.addMessage(sessionId, 'assistant', answer)
+          logger.info('App/ReAct', `通用问答回复: ${answer.substring(0, 100)}`)
+        } catch (chatErr) {
+          logger.error('App/ReAct', '通用问答调用失败', chatErr as Error)
+          messageStore.addSystemMessage('抱歉，我暂时无法回答，请稍后再试。')
+        }
+      } else if (!hasModalAction && scheduleQueryStep) {
+        // schedule_query 工具被调用 → 结构化卡片展示
+        logger.info('App/ReAct', '→ 检测到日程查询，使用结构化卡片展示')
+        const queryParams = scheduleQueryStep.actionInput || {}
+        const queryDate = queryParams.date || null
+        const queryKeyword = queryParams.keyword || null
+        
+        // 从 store 重新查询以获得完整的 Schedule 对象
+        let querySchedules = [...scheduleStore.schedules]
+        if (queryDate) {
+          querySchedules = querySchedules.filter(s => {
+            if (s.date === queryDate) return true
+            // 跨天日程：有 endDate 且查询日期在 date ~ endDate 之间
+            if (s.endDate && s.endDate >= queryDate && s.date <= queryDate) return true
+            return false
+          })
+        }
+        if (queryKeyword) {
+          const kw = queryKeyword.toLowerCase()
+          querySchedules = querySchedules.filter(s =>
+            s.content.toLowerCase().includes(kw) ||
+            s.location?.toLowerCase().includes(kw)
+          )
+        }
+        querySchedules.sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime))
+        
+        const queryResultData: ScheduleQueryResultData = {
+          queryDate,
+          queryKeyword,
+          summary: (result.finalAnswer && result.finalAnswer.trim() && result.finalAnswer.trim() !== ' ')
+            ? result.finalAnswer.trim()
+            : (querySchedules.length > 0 ? `共找到 ${querySchedules.length} 条日程` : '未找到匹配的日程'),
+          totalCount: querySchedules.length,
+          schedules: querySchedules.map(s => ({
+            id: s.id,
+            date: s.date,
+            startTime: s.startTime,
+            endTime: s.endTime,
+            endDate: s.endDate,
+            content: s.content,
+            type: s.type,
+            location: s.location,
+            attendees: s.attendees,
+            resources: s.resources,
+            meta: s.meta
+          }))
+        }
+        messageStore.addDataMessage('schedule_query_result', '', queryResultData)
+      } else if (!hasModalAction && result.finalAnswer && result.finalAnswer.trim()) {
+        // 有工具调用但无弹窗（如查询类操作），直接展示 finalAnswer
         logger.info('App/ReAct', '→ 添加系统消息')
         messageStore.addSystemMessage(result.finalAnswer)
       } else if (!hasModalAction) {
@@ -403,6 +577,91 @@ async function processInputWithReAct(text: string) {
     logger.info('App/ReAct', '========== ReAct 处理结束 ==========')
     brain.stopThinking()
   }
+}
+
+/**
+ * 从 draft 中读取任务列表并执行自动推荐（偏好收集完毕后调用）
+ */
+async function doAutoRecommendExec() {
+  const draft = brain.state.value.draft
+  if (!draft?.scheduleId || !draft?.autoExecTaskIds) {
+    brain.reset()
+    return
+  }
+  
+  const ids = draft.autoExecTaskIds
+  const tasksToRun = taskStore.pendingTasks.filter(t => ids.includes(t.id))
+  
+  if (tasksToRun.length === 0) {
+    messageStore.addSystemMessage('当前没有可自动执行的任务。')
+    brain.reset()
+    return
+  }
+  
+  brain.startThinking('执行推荐技能...')
+  
+  if (useReActMode.value) {
+    // === ReAct 模式：Human out of the loop ===
+    const { autoExecuteTask, createPaymentTask } = await import('./services/react/autoOrderHelper')
+    
+    // 如果酒店地点仍未设置，用目的地兜底
+    const preScheduleId = draft.scheduleId as string
+    const preSchedule = scheduleStore.getSchedule(preScheduleId)
+    if (preSchedule?.meta?.to && !preSchedule.meta.hotelLocation) {
+      scheduleStore.updateSchedule(preScheduleId, {
+        meta: { ...(preSchedule.meta || {}), hotelLocation: preSchedule.meta.to }
+      })
+    }
+    
+    const allOrderItems: import('./types/message').PaymentOrderItem[] = []
+    
+    for (const task of tasksToRun) {
+      const schedule = scheduleStore.getSchedule(task.scheduleId)
+      if (!schedule) continue
+      
+      const skillLabel = task.title || task.skill
+      messageStore.addSystemMessage(`⏳ 正在处理「${skillLabel}」...`)
+      const processingMsgId = messageStore.messages[messageStore.messages.length - 1]?.id
+      
+      const delay = 3000 + Math.random() * 2000
+      await new Promise(r => setTimeout(r, delay))
+      
+      const execResult = await autoExecuteTask(task, schedule)
+      
+      const resultText = execResult.messages.filter(Boolean).join('<br>') || `✅ ${skillLabel} 已完成`
+      if (processingMsgId !== undefined) {
+        messageStore.updateMessage(processingMsgId, { content: resultText })
+      }
+      
+      allOrderItems.push(...execResult.orderItems)
+      taskStore.completeTask(task.id)
+      await new Promise(r => setTimeout(r, 300))
+    }
+    
+    if (allOrderItems.length > 0) {
+      const scheduleId = draft.scheduleId as string
+      const schedule = scheduleStore.getSchedule(scheduleId)
+      const paymentTask = createPaymentTask(scheduleId, allOrderItems, schedule?.date || '')
+      taskStore.addTasks([paymentTask])
+      
+      messageStore.addDataMessage('payment_order', '', {
+        scheduleId,
+        taskId: paymentTask.id,
+        orders: allOrderItems,
+        totalAmount: paymentTask.meta?.totalAmount || 0,
+        confirmed: false
+      } as import('./types').PaymentOrderData)
+    }
+  } else {
+    // === 传统模式：展示列表让用户手动选择 ===
+    for (const task of tasksToRun) {
+      await handleExecuteTask(task)
+      await new Promise(r => setTimeout(r, 300))
+    }
+  }
+  
+  brain.stopThinking()
+  brain.reset()
 }
 
 // 处理用户输入（传统模式）
@@ -429,74 +688,87 @@ async function processInput(text: string) {
         return
       }
 
-      brain.startThinking('执行推荐技能...')
+      // 检查是否有交通/酒店任务需要先收集偏好
+      const hasTransport = tasksToRun.some(t => t.skill === 'arrange_transport')
+      const hasHotel = tasksToRun.some(t => t.skill === 'check_hotel')
       
-      if (useReActMode.value) {
-        // === ReAct 模式：Human out of the loop ===
-        // 自动选择推荐项并生成订单，无需人工逐一选择
-        const { autoExecuteTask, createPaymentTask } = await import('./services/react/autoOrderHelper')
-        
-        // 自动设置酒店地点（使用目的地），确保酒店技能有地点参数
+      if (hasTransport) {
+        // 先询问出行时间偏好
+        brain.setMode('WAIT_RECOMMEND_TRANSPORT_TIME')
+        brain.state.value.statusText = '等待输入出行时间...'
+        messageStore.addSystemMessage('🕐 请问您期望几点出发？')
+        return
+      } else if (hasHotel) {
+        // 没有交通任务但有酒店任务，直接问商圈
         const preScheduleId = draft.scheduleId as string
         const preSchedule = scheduleStore.getSchedule(preScheduleId)
-        if (preSchedule?.meta?.to && !preSchedule.meta.hotelLocation) {
-          scheduleStore.updateSchedule(preScheduleId, {
-            meta: { ...(preSchedule.meta || {}), hotelLocation: preSchedule.meta.to }
-          })
-        }
-        
-        const allOrderItems: import('./types/message').PaymentOrderItem[] = []
-        
-        for (const task of tasksToRun) {
-          const schedule = scheduleStore.getSchedule(task.scheduleId)
-          if (!schedule) continue
-          
-          const execResult = await autoExecuteTask(task, schedule)
-          
-          // 展示自动预下单消息
-          for (const msg of execResult.messages) {
-            if (msg) messageStore.addSystemMessage(msg)
-          }
-          
-          // 收集订单项
-          allOrderItems.push(...execResult.orderItems)
-          
-          // 完成任务
-          taskStore.completeTask(task.id)
-          await new Promise(r => setTimeout(r, 300))
-        }
-        
-        // 生成统一支付任务
-        if (allOrderItems.length > 0) {
-          const scheduleId = draft.scheduleId as string
-          const schedule = scheduleStore.getSchedule(scheduleId)
-          const paymentTask = createPaymentTask(scheduleId, allOrderItems, schedule?.date || '')
-          taskStore.addTasks([paymentTask])
-          
-          // 展示待支付订单卡片
-          messageStore.addDataMessage('payment_order', '', {
-            scheduleId,
-            taskId: paymentTask.id,
-            orders: allOrderItems,
-            totalAmount: paymentTask.meta?.totalAmount || 0,
-            confirmed: false
-          } as import('./types').PaymentOrderData)
-        }
-      } else {
-        // === 传统模式：展示列表让用户手动选择 ===
-        for (const task of tasksToRun) {
-          await handleExecuteTask(task)
-          await new Promise(r => setTimeout(r, 300))
-        }
+        const destination = preSchedule?.meta?.to || preSchedule?.location || ''
+        brain.setMode('WAIT_RECOMMEND_HOTEL_LOC')
+        brain.state.value.statusText = '等待输入酒店商圈...'
+        messageStore.addSystemMessage(`🏨 请问您希望住在${destination}的哪个商圈或地点？`)
+        return
       }
-      
-      brain.stopThinking()
-      brain.reset()
+
+      // 没有交通/酒店任务，直接执行
+      await doAutoRecommendExec()
       return
     }
-
+  
     // 无法识别的输入，提示用户按规范回复
-    messageStore.addSystemMessage('如果需要我自动执行这些任务，请回复“是”或“好”；如果不需要，请回复“不要”或“算了”。')
+    messageStore.addSystemMessage('如果需要我自动执行这些任务，请回复"是"或"好"；如果不需要，请回复"不要"或"算了"。')
+    return
+  }
+  
+  // 处理出行时间偏好输入
+  if (brain.state.value.mode === 'WAIT_RECOMMEND_TRANSPORT_TIME' && brain.state.value.draft?.scheduleId) {
+    const timeText = text.trim()
+    const parsedTime = extractTime(timeText)
+    if (!parsedTime) {
+      messageStore.addSystemMessage('⚠️ 未识别到时间，请输入如"上午8点"、"下午2点"等。')
+      return
+    }
+      
+    // 保存出行时间到日程
+    const preScheduleId = brain.state.value.draft.scheduleId as string
+    const preSchedule = scheduleStore.getSchedule(preScheduleId)
+    if (preSchedule) {
+      scheduleStore.updateSchedule(preScheduleId, { startTime: parsedTime })
+    }
+    logger.info('App/Pref', `✓ 出行时间偏好: ${parsedTime}`)
+      
+    // 检查是否有酒店任务需要问商圈
+    const ids = brain.state.value.draft.autoExecTaskIds || []
+    const hasHotel = taskStore.pendingTasks.some(t => ids.includes(t.id) && t.skill === 'check_hotel')
+      
+    if (hasHotel) {
+      const destination = preSchedule?.meta?.to || preSchedule?.location || ''
+      brain.setMode('WAIT_RECOMMEND_HOTEL_LOC')
+      brain.state.value.statusText = '等待输入酒店商圈...'
+      messageStore.addSystemMessage(`🏨 请问您希望住在${destination}的哪个商圈或地点？`)
+      return
+    }
+      
+    // 没有酒店任务，直接执行
+    await doAutoRecommendExec()
+    return
+  }
+  
+  // 处理酒店商圈偏好输入
+  if (brain.state.value.mode === 'WAIT_RECOMMEND_HOTEL_LOC' && brain.state.value.draft?.scheduleId) {
+    const hotelLocation = text.trim()
+      
+    // 保存酒店商圈到日程
+    const preScheduleId = brain.state.value.draft.scheduleId as string
+    const preSchedule = scheduleStore.getSchedule(preScheduleId)
+    if (preSchedule) {
+      scheduleStore.updateSchedule(preScheduleId, {
+        meta: { ...(preSchedule.meta || {}), hotelLocation }
+      })
+    }
+    logger.info('App/Pref', `✓ 酒店商圈偏好: ${hotelLocation}`)
+      
+    // 偏好已收集完毕，执行自动推荐
+    await doAutoRecommendExec()
     return
   }
 
@@ -875,6 +1147,8 @@ function handleSend(text: string) {
   // 这些模式均为等待用户补充信息的中间状态，需要统一由 processInput 处理
   const specialModes: BrainMode[] = [
     'WAIT_AUTO_EXEC_CONFIRM',
+    'WAIT_RECOMMEND_TRANSPORT_TIME',
+    'WAIT_RECOMMEND_HOTEL_LOC',
     'WAIT_HOTEL_LOCATION',
     'WAIT_TIME',
     'WAIT_CONTENT',
@@ -1211,6 +1485,49 @@ function handleSelectFlight(flightNo: string, _scheduleId: string, msgId: number
 }
 
 /**
+ * 换单辅助：替换支付清单中的指定订单项
+ */
+function replacePaymentOrder(
+  paymentMsgId: number,
+  oldOrderId: string,
+  newOrder: import('./types/message').PaymentOrderItem,
+  scheduleId: string
+) {
+  const paymentMsg = messageStore.getMessage(paymentMsgId)
+  if (!paymentMsg || !paymentMsg.data || !('orders' in (paymentMsg.data as object))) {
+    logger.error('App/ChangeOrder', '✗ 支付清单消息不存在')
+    return
+  }
+  
+  const paymentData = paymentMsg.data as import('./types/message').PaymentOrderData
+  const orderIndex = paymentData.orders.findIndex(o => o.id === oldOrderId)
+  if (orderIndex === -1) {
+    logger.error('App/ChangeOrder', `✗ 未找到订单 ${oldOrderId}`)
+    return
+  }
+  
+  // 替换订单
+  const updatedOrders = [...paymentData.orders]
+  updatedOrders[orderIndex] = newOrder
+  const newTotalAmount = updatedOrders.reduce((sum, o) => sum + o.price, 0)
+  
+  messageStore.updateMessage(paymentMsgId, {
+    data: { ...paymentData, orders: updatedOrders, totalAmount: newTotalAmount }
+  })
+  
+  // 同步 schedule.meta.pendingOrders
+  const schedule = scheduleStore.getSchedule(scheduleId)
+  if (schedule?.meta?.pendingOrders) {
+    const pendingIndex = (schedule.meta.pendingOrders as any[]).findIndex((o: any) => o.id === oldOrderId)
+    if (pendingIndex !== -1) {
+      (schedule.meta.pendingOrders as any[])[pendingIndex] = newOrder
+    }
+  }
+  
+  logger.info('App/ChangeOrder', `✓ 订单已替换, 新总额: ¥${newTotalAmount}`)
+}
+
+/**
  * 确认航班预订
  */
 function handleConfirmFlight(flightNo: string, scheduleId: string, msgId: number) {
@@ -1236,6 +1553,33 @@ function handleConfirmFlight(flightNo: string, scheduleId: string, msgId: number
     data: { ...flightData, selected: flightNo, locked: true }
   })
   
+  // === 换单模式：回写到支付清单 ===
+  if (flightData.changeContext) {
+    const { paymentMsgId, orderId } = flightData.changeContext
+    const newOrderItem: import('./types/message').PaymentOrderItem = {
+      id: `flight-order-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      type: 'flight',
+      title: `${selectedFlight.airline} ${selectedFlight.flightNo}`,
+      details: `${selectedFlight.from} → ${selectedFlight.to} | ${selectedFlight.departTime}-${selectedFlight.arriveTime} | ${selectedFlight.duration}`,
+      price: selectedFlight.price,
+      paymentUrl: `https://flight.example.com/pay?order=${selectedFlight.flightNo}&price=${selectedFlight.price}`,
+      status: 'pending'
+    }
+    replacePaymentOrder(paymentMsgId, orderId, newOrderItem, scheduleId)
+    
+    // 在底部重新发送一条最新的支付清单，避免用户往上翻
+    const paymentMsg = messageStore.getMessage(paymentMsgId)
+    if (paymentMsg?.data && 'orders' in (paymentMsg.data as object)) {
+      const latestData = paymentMsg.data as import('./types/message').PaymentOrderData
+      messageStore.addSystemMessage(
+        `✅ 已更换航班为 ${selectedFlight.flightNo}（${selectedFlight.from} → ${selectedFlight.to}），价格￥${selectedFlight.price}`
+      )
+      messageStore.addDataMessage('payment_order', '', { ...latestData })
+    }
+    return
+  }
+  
+  // === 正常模式 ===
   // 添加到日程资源
   const resource: Resource = {
     id: crypto.randomUUID(),
@@ -1352,6 +1696,44 @@ function handleConfirmHotel(hotelId: string, scheduleId: string, msgId: number) 
     data: { ...hotelData, selected: hotelId, locked: true }
   })
   
+  // === 换单模式：回写到支付清单 ===
+  if (hotelData.changeContext) {
+    const { paymentMsgId, orderId } = hotelData.changeContext
+    // 计算入住天数
+    const schedule = scheduleStore.getSchedule(scheduleId)
+    let nights = 1
+    if (schedule?.endDate && schedule?.date) {
+      const start = new Date(schedule.date)
+      const end = new Date(schedule.endDate)
+      const diffDays = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+      if (diffDays > 0) nights = diffDays
+    }
+    const totalPrice = selectedHotel.price * nights
+    
+    const newOrderItem: import('./types/message').PaymentOrderItem = {
+      id: `hotel-order-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      type: 'hotel',
+      title: selectedHotel.name,
+      details: `${selectedHotel.address} | ${selectedHotel.roomType} | ${hotelData.checkInDate} 入住 ${nights}晚 | ${selectedHotel.star}星级`,
+      price: totalPrice,
+      paymentUrl: `https://hotel.example.com/pay?order=${selectedHotel.hotelId}&price=${totalPrice}`,
+      status: 'pending'
+    }
+    replacePaymentOrder(paymentMsgId, orderId, newOrderItem, scheduleId)
+    
+    // 在底部重新发送一条最新的支付清单，避免用户往上翻
+    const paymentMsg = messageStore.getMessage(paymentMsgId)
+    if (paymentMsg?.data && 'orders' in (paymentMsg.data as object)) {
+      const latestData = paymentMsg.data as import('./types/message').PaymentOrderData
+      messageStore.addSystemMessage(
+        `✅ 已更换酒店为 ${selectedHotel.name}（${selectedHotel.roomType}），价格￥${totalPrice}`
+      )
+      messageStore.addDataMessage('payment_order', '', { ...latestData })
+    }
+    return
+  }
+  
+  // === 正常模式 ===
   // 添加到日程资源
   const resource: Resource = {
     id: crypto.randomUUID(),
@@ -1610,6 +1992,291 @@ function handleSelectScheduleToEdit(schedule: Schedule) {
   messageStore.addSystemMessage(`已打开「${schedule.content}」的编辑页面`)
 }
 
+/**
+ * 冲突解决：用户选择了某个空闲时段
+ */
+async function handleConflictSlotSelect(slotIndex: number, data: ConflictResolutionData, msgId: number) {
+  const slot = data.availableSlots[slotIndex]
+  if (!slot) return
+
+  // 标记消息中的按钮为已选中
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data && 'selectedIndex' in msg.data) {
+    (msg.data as ConflictResolutionData).selectedIndex = slotIndex
+  }
+
+  // 用所选时段的 date/startTime/endTime 更新原始上下文并创建日程
+  const ctx = {
+    ...data.originalCtx,
+    date: slot.date,
+    startTime: slot.startTime,
+    endTime: slot.endTime
+  } as Parameters<typeof createSchedule>[0]
+
+  await createSchedule(ctx)
+}
+
+/**
+ * 冲突解决：用户同意调整至推荐时段
+ */
+async function handleConflictAcceptNearest(data: ConflictResolutionData, msgId: number) {
+  if (!data.nearestSlot) return
+
+  // 标记消息状态
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data && 'userAction' in msg.data) {
+    (msg.data as ConflictResolutionData).userAction = 'accepted'
+  }
+
+  const slot = data.nearestSlot
+  const ctx = {
+    ...data.originalCtx,
+    date: slot.date,
+    startTime: slot.startTime,
+    endTime: slot.endTime
+  } as Parameters<typeof createSchedule>[0]
+
+  await createSchedule(ctx)
+}
+
+/**
+ * 冲突解决：用户选择修改时间（展示更多可选时段）
+ */
+function handleConflictShowMore(data: ConflictResolutionData, msgId: number) {
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data && 'userAction' in msg.data) {
+    (msg.data as ConflictResolutionData).userAction = 'show_more'
+  }
+}
+
+/**
+ * 冲突解决：用户取消创建
+ */
+function handleConflictCancel(data: ConflictResolutionData, msgId: number) {
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data && 'userAction' in msg.data) {
+    (msg.data as ConflictResolutionData).userAction = 'cancelled'
+  }
+  messageStore.addSystemMessage(
+    `<div class="bg-gray-50 border-l-4 border-gray-300 p-3 rounded">
+      <div class="text-sm text-gray-600"><i class="fa-solid fa-ban mr-1"></i>已取消创建「${data.originalCtx.content || '日程'}」</div>
+    </div>`
+  )
+}
+
+/**
+ * 支付订单：模拟全部支付
+ */
+async function handlePayAll(data: import('./types/message').PaymentOrderData, msgId: number) {
+  brain.startThinking('正在处理支付...')
+  
+  // 模拟支付处理 3~5 秒
+  const delay = 3000 + Math.random() * 2000
+  await new Promise(r => setTimeout(r, delay))
+  
+  // 1. 更新所有订单状态为 'paid'
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data && 'orders' in (msg.data as object)) {
+    const paymentData = msg.data as import('./types/message').PaymentOrderData
+    paymentData.orders.forEach(order => {
+      order.status = 'paid'
+    })
+    paymentData.confirmed = true
+  }
+  
+  // 2. 将订单对应的资源添加到日程
+  const scheduleId = data.scheduleId
+  const schedule = scheduleStore.getSchedule(scheduleId)
+  if (schedule) {
+    for (const order of data.orders) {
+      // 检查是否已有同类资源，避免重复
+      const alreadyHas = schedule.resources.some(r => 
+        r.resourceType === (order.type === 'flight' ? 'transport' : 'hotel')
+      )
+      if (!alreadyHas) {
+        const resource: import('./types').Resource = {
+          id: order.id,
+          name: order.title,
+          icon: order.type === 'flight' ? 'fa-plane' : 'fa-hotel',
+          resourceType: order.type === 'flight' ? 'transport' : 'hotel'
+        }
+        scheduleStore.addResource(scheduleId, resource)
+      }
+    }
+    
+    // 更新 pendingOrders 状态
+    if (schedule.meta?.pendingOrders) {
+      schedule.meta.pendingOrders.forEach(o => {
+        o.status = 'paid'
+      })
+    }
+  }
+  
+  // 3. 完成支付任务
+  if (data.taskId) {
+    taskStore.completeTask(data.taskId)
+  }
+  
+  brain.stopThinking()
+  
+  // 4. 回显支付成功消息
+  const totalAmount = data.orders.reduce((sum, o) => sum + o.price, 0)
+  const flightOrders = data.orders.filter(o => o.type === 'flight')
+  const hotelOrders = data.orders.filter(o => o.type === 'hotel')
+  
+  let summaryParts: string[] = []
+  flightOrders.forEach(o => {
+    summaryParts.push(`✈️ ${o.title}：¥${o.price}`)
+  })
+  hotelOrders.forEach(o => {
+    summaryParts.push(`🏨 ${o.title}：¥${o.price}`)
+  })
+  
+  messageStore.addSystemMessage(
+    `<div class="bg-green-50 border-l-4 border-green-400 p-3 rounded">
+      <div class="font-bold text-green-700 mb-2"><i class="fa-solid fa-circle-check mr-1"></i>支付成功</div>
+      <div class="text-sm text-green-800 space-y-1">
+        ${summaryParts.map(s => `<div>${s}</div>`).join('')}
+      </div>
+      <div class="mt-2 pt-2 border-t border-green-200 text-sm font-bold text-green-700">
+        合计：¥${totalAmount}
+      </div>
+    </div>`
+  )
+  
+  // 5. 切换到日程所在日期，确保实时概览可见
+  if (schedule && schedule.date !== scheduleStore.currentDate) {
+    scheduleStore.setDate(schedule.date)
+  }
+}
+
+/**
+ * 换单：用户在支付清单中点击"换一个"
+ * 重新弹出该类型的推荐列表，标记 changeContext 以便确认后回写
+ */
+async function handleChangeOrder(
+  orderId: string,
+  orderType: 'flight' | 'hotel',
+  paymentData: import('./types/message').PaymentOrderData,
+  paymentMsgId: number
+) {
+  logger.info('App/ChangeOrder', `换单请求: orderId=${orderId}, type=${orderType}, paymentMsgId=${paymentMsgId}`)
+  
+  const schedule = scheduleStore.getSchedule(paymentData.scheduleId)
+  if (!schedule) {
+    logger.error('App/ChangeOrder', '✗ 未找到对应日程')
+    messageStore.addSystemMessage('⚠️ 未找到对应日程，无法换单。')
+    return
+  }
+  
+  const changeContext = { paymentMsgId, orderId }
+  
+  if (orderType === 'flight') {
+    const meta = schedule.meta || {}
+    const from = (meta.from as string) || ''
+    const to = (meta.to as string) || schedule.location || ''
+    
+    if (!from || !to) {
+      messageStore.addSystemMessage('⚠️ 缺少出发地/目的地信息，无法重新推荐航班。')
+      return
+    }
+    
+    const { generateFlightList } = await import('./services/traditional/skillRegistry')
+    const flightResult = generateFlightList(schedule, from, to)
+    if (flightResult.type === 'flight_list' && flightResult.data) {
+      messageStore.addSystemMessage(`✈️ 以下是可选航班（${from} → ${to}），请重新选择：`)
+      messageStore.addDataMessage('flight_list', '', {
+        ...flightResult.data,
+        scheduleId: paymentData.scheduleId,
+        changeContext
+      } as import('./types').FlightListData)
+    }
+  } else if (orderType === 'hotel') {
+    const hotelLocation = (schedule.meta as any)?.hotelLocation || schedule.location || ''
+    
+    if (!hotelLocation) {
+      messageStore.addSystemMessage('⚠️ 缺少酒店地点信息，无法重新推荐酒店。')
+      return
+    }
+    
+    const { generateHotelList } = await import('./services/traditional/skillRegistry')
+    const hotelResult = generateHotelList(schedule, hotelLocation)
+    if (hotelResult.type === 'hotel_list' && hotelResult.data) {
+      messageStore.addSystemMessage(`🏨 以下是可选酒店（${hotelLocation}），请重新选择：`)
+      messageStore.addDataMessage('hotel_list', '', {
+        ...hotelResult.data,
+        scheduleId: paymentData.scheduleId,
+        changeContext
+      } as import('./types').HotelListData)
+    }
+  }
+}
+
+/**
+ * 冲突解决：用户选择了自定义日期（包括"明天"快捷按钮和日期选择器）
+ * 先检查新日期原始时段是否仍然冲突，无冲突则直接创建；有冲突则查询该日期的空闲时段展示
+ */
+async function handleConflictCustomDate(targetDate: string, data: ConflictResolutionData, msgId: number) {
+  // 标记当前消息为已处理
+  const msg = messageStore.getMessage(msgId)
+  if (msg && msg.data && 'userAction' in msg.data) {
+    (msg.data as ConflictResolutionData).userAction = 'cancelled'
+  }
+
+  const ctx = data.originalCtx
+  const duration = timeToMinutes(ctx.endTime) - timeToMinutes(ctx.startTime)
+
+  // 格式化日期用于展示
+  const dateObj = new Date(targetDate)
+  const month = dateObj.getMonth() + 1
+  const day = dateObj.getDate()
+  const dateLabel = `${month}月${day}日`
+
+  // 如果选择的是今天，需要过滤当前时间之前的时段
+  const now = new Date()
+  const todayStr = now.toISOString().split('T')[0]
+  const nowMinutes = now.getHours() * 60 + now.getMinutes()
+  const minStartMin = targetDate === todayStr ? nowMinutes : undefined
+
+  // ★ 关键：先检查新日期的原始时段是否有冲突
+  const newDateConflict = scheduleStore.checkConflict(targetDate, ctx.startTime, ctx.endTime)
+
+  if (!newDateConflict) {
+    // 新日期无冲突 → 直接走正常创建流程（含场景配置、技能任务生成）
+    const newCtx = { ...ctx, date: targetDate } as Parameters<typeof createSchedule>[0]
+    await createSchedule(newCtx)
+    return
+  }
+
+  // 新日期也有冲突 → 展示新日期的冲突信息和空闲时段
+  logger.info('App/Conflict', `${dateLabel} 也存在冲突: vs「${newDateConflict.content}」${newDateConflict.startTime}-${newDateConflict.endTime}`)
+
+  // 用新日期查找就近推荐
+  const nearest = scheduleStore.findNearestAvailableSlot(targetDate, ctx.startTime, duration, undefined, minStartMin)
+  const slots = scheduleStore.findAvailableSlots(targetDate, duration, undefined, minStartMin)
+
+  if (nearest || slots.length > 0) {
+    messageStore.addDataMessage('conflict_resolution', '', {
+      // ★ 使用新日期的冲突信息
+      conflictInfo: { content: newDateConflict.content, startTime: newDateConflict.startTime, endTime: newDateConflict.endTime },
+      nearestSlot: nearest ? { date: targetDate, startTime: nearest.start, endTime: nearest.end } : undefined,
+      availableSlots: slots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end })),
+      // ★ 更新 originalCtx 的 date 为新日期
+      originalCtx: { ...ctx, date: targetDate },
+      isNextDay: targetDate !== todayStr,
+      selectedIndex: null,
+      userAction: 'pending'
+    } as ConflictResolutionData)
+  } else {
+    messageStore.addSystemMessage(
+      `<div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+        <div class="font-bold text-red-600 text-xs mb-1"><i class="fa-solid fa-circle-xmark"></i> 无可用时段</div>
+        <div class="text-sm text-gray-700">${dateLabel} 无法容纳该时长的日程，请选择其他日期。</div>
+      </div>`
+    )
+  }
+}
+
 function handleDeleteEvent(id: string) {
   if (confirm('删除此日程?')) {
     scheduleStore.deleteSchedule(id)
@@ -1727,7 +2394,7 @@ function handleDeleteSkill(index: number) {
 }
 
 // 处理创建会议提交
-function handleCreateMeetingSubmit(data: any) {
+async function handleCreateMeetingSubmit(data: any) {
   logger.info('App/Meeting', '========== 创建会议提交 ==========')
   logger.debug('App/Meeting', '表单数据:', data)
   
@@ -1759,17 +2426,28 @@ function handleCreateMeetingSubmit(data: any) {
     agenda: data.remarks || '',
     meta: {
       location: data.location,
+      roomType: data.roomType,
       attendeeCount: attendees.length
     }
   }
   
-  // 冲突检测
+  // 冲突检测 → 智能冲突解决
   const conflict = scheduleStore.checkConflict(newSchedule.date, newSchedule.startTime, newSchedule.endTime)
   if (conflict) {
-    logger.warn('App/Meeting', `✗ 时间冲突: ${conflict.content}`)
-    messageStore.addSystemMessage(
-      `❌ 无法创建会议：该时段 ${newSchedule.startTime}-${newSchedule.endTime} 与现有日程「${conflict.content}」(${conflict.startTime}-${conflict.endTime}) 冲突。`
-    )
+    logger.warn('App/Meeting', `✗ 时间冲突: ${conflict.content}，启动智能冲突解决`)
+    // 关闭模态框
+    showCreateMeetingModal.value = false
+    createMeetingData.value = {}
+    // 调用智能冲突解决
+    await resolveConflictAndCreate({
+      date: newSchedule.date,
+      startTime: newSchedule.startTime,
+      endTime: newSchedule.endTime,
+      content: newSchedule.content,
+      scenarioCode: 'MEETING',
+      location: newSchedule.location,
+      attendees: newSchedule.attendees
+    })
     return
   }
   
@@ -1844,13 +2522,22 @@ async function handleTripApplicationSubmit(data: import('./types').TripApplicati
   }, data.scheduleId || `TRIP-${Date.now()}`)
   logger.info('App/Trip', `✓ 日程对象已创建: ${schedule.id}`)
   
-  // 冲突检测
+  // 冲突检测 → 智能冲突解决
   const conflict = scheduleStore.checkConflict(schedule.date, schedule.startTime, schedule.endTime)
   if (conflict) {
-    logger.warn('App/Trip', `✗ 时间冲突: ${conflict.content}`)
-    messageStore.addSystemMessage(
-      `❌ 无法创建出差日程：该时段 ${schedule.startTime}-${schedule.endTime} 与现有日程「${conflict.content}」(${conflict.startTime}-${conflict.endTime}) 冲突。`
-    )
+    logger.warn('App/Trip', `✗ 时间冲突: ${conflict.content}，启动智能冲突解决`)
+    await resolveConflictAndCreate({
+      date: schedule.date,
+      startTime: schedule.startTime,
+      endTime: schedule.endTime,
+      endDate: schedule.endDate,
+      content: schedule.content,
+      scenarioCode: 'TRIP',
+      location: schedule.location,
+      transport: data.transport,
+      from: data.from,
+      to: data.to
+    })
     return
   }
   
@@ -2068,6 +2755,13 @@ onUnmounted(() => {
       @confirm-skill-params="handleConfirmSkillParams"
       @cancel-skill-params="handleCancelSkillParams"
       @select-schedule-to-edit="handleSelectScheduleToEdit"
+      @select-conflict-slot="handleConflictSlotSelect"
+      @accept-conflict-nearest="handleConflictAcceptNearest"
+      @show-more-conflict-slots="handleConflictShowMore"
+      @cancel-conflict="handleConflictCancel"
+      @select-conflict-custom-date="handleConflictCustomDate"
+      @pay-all="handlePayAll"
+      @change-order="handleChangeOrder"
     />
     </div>
 

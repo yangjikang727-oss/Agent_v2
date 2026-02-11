@@ -63,6 +63,10 @@ export function useBrain() {
         return ['确认继续', '取消']
       case 'WAIT_AUTO_EXEC_CONFIRM':
         return ['是', '好', '不用自动执行']
+      case 'WAIT_RECOMMEND_TRANSPORT_TIME':
+        return ['上午 8 点', '上午 10 点', '下午 2 点', '下午 4 点']
+      case 'WAIT_RECOMMEND_HOTEL_LOC':
+        return ['国贸附近', '中关村', '陆家嘴', '天府广场']
       default:
         return []
     }
