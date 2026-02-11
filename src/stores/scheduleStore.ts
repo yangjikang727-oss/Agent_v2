@@ -194,8 +194,27 @@ export const useScheduleStore = defineStore('schedule', () => {
         (s.endDate && date >= s.date && date <= s.endDate)
       if (!dateMatch) return false
       
-      const existStart = timeToMinutes(s.startTime)
-      const existEnd = timeToMinutes(s.endTime)
+      // 跨天日程：根据查询日期调整冲突检测的有效时间范围
+      let existStart: number
+      let existEnd: number
+      if (s.endDate && s.date !== s.endDate) {
+        if (date === s.date) {
+          // 出发日：从 startTime 到当天结束
+          existStart = timeToMinutes(s.startTime)
+          existEnd = DAY_END_MINUTES
+        } else if (date === s.endDate) {
+          // 返程日：从当天开始到 endTime
+          existStart = 0
+          existEnd = timeToMinutes(s.endTime)
+        } else {
+          // 中间日：全天占用
+          existStart = 0
+          existEnd = DAY_END_MINUTES
+        }
+      } else {
+        existStart = timeToMinutes(s.startTime)
+        existEnd = timeToMinutes(s.endTime)
+      }
       
       // 冲突条件：
       // 1. 新日程开始时间在现有日程时间范围内
@@ -239,12 +258,17 @@ export const useScheduleStore = defineStore('schedule', () => {
     originalStartTime: string,
     duration: number,
     excludeId?: string,
-    minStartMin?: number
+    minStartMin?: number,
+    additionalOccupied?: Array<{ start: number; end: number }>
   ): { start: string; end: string } | null {
     const originalStart = timeToMinutes(originalStartTime)
     
-    // 获取当天所有已有日程的占用时段（排序）
+    // 获取当天所有已有日程的占用时段（排序），合并额外占用
     const occupied = getOccupiedSlots(date, excludeId)
+    if (additionalOccupied) {
+      occupied.push(...additionalOccupied)
+      occupied.sort((a, b) => a.start - b.start)
+    }
     
     // 策略：先在优先时段（工作时间）找，找不到再扩展到加班时段
     for (const windows of [PRIORITY_WINDOWS, ALL_ALLOWED_WINDOWS]) {
@@ -333,10 +357,25 @@ export const useScheduleStore = defineStore('schedule', () => {
           (s.endDate && date >= s.date && date <= s.endDate)
         return dateMatch
       })
-      .map(s => ({
-        start: timeToMinutes(s.startTime),
-        end: timeToMinutes(s.endTime)
-      }))
+      .map(s => {
+        // 跨天日程：根据查询日期调整占用时间范围
+        if (s.endDate && s.date !== s.endDate) {
+          if (date === s.date) {
+            // 出发日：从 startTime 到当天结束
+            return { start: timeToMinutes(s.startTime), end: DAY_END_MINUTES }
+          } else if (date === s.endDate) {
+            // 返程日：从当天开始到 endTime
+            return { start: 0, end: timeToMinutes(s.endTime) }
+          } else {
+            // 中间日：全天占用
+            return { start: 0, end: DAY_END_MINUTES }
+          }
+        }
+        return {
+          start: timeToMinutes(s.startTime),
+          end: timeToMinutes(s.endTime)
+        }
+      })
       .sort((a, b) => a.start - b.start)
   }
 
@@ -351,9 +390,14 @@ export const useScheduleStore = defineStore('schedule', () => {
     date: string,
     duration: number,
     excludeId?: string,
-    minStartMin?: number
+    minStartMin?: number,
+    additionalOccupied?: Array<{ start: number; end: number }>
   ): Array<{ start: string; end: string }> {
     const occupied = getOccupiedSlots(date, excludeId)
+    if (additionalOccupied) {
+      occupied.push(...additionalOccupied)
+      occupied.sort((a, b) => a.start - b.start)
+    }
     
     // 先在优先时段（工作时间）内查找
     const priorityResults = scanWindows(PRIORITY_WINDOWS, occupied, duration, minStartMin)

@@ -2205,44 +2205,38 @@ function handleConflictAdjustTarget(target: 'existing' | 'new', data: ConflictRe
     const minStartMin = targetDate === todayStr ? nowMinutes : undefined
 
     // 查找可用时段时，需排除原日程自身（因为原日程将被移走）
-    // 同时需要排除新日程打算占用的时段
+    // 同时需要将新日程打算占用的时段作为虚拟占用注入搜索，避免推荐与新日程冲突的时段
     const newStart = timeToMinutes(ctx.startTime)
     const newEnd = timeToMinutes(ctx.endTime)
+    // 仅同一天时需注入新日程预占时段
+    const newScheduleOccupied = targetDate === ctx.date
+      ? [{ start: newStart, end: newEnd }]
+      : []
 
     // ★ 锚点优先工作时间：原日程若在工作时间内(08:30-12:00/13:30-17:30)则保持，否则回退到09:00
     const existingStartMin = timeToMinutes(existingSchedule.startTime)
     const isInWorkingHours = (existingStartMin >= 510 && existingStartMin < 720) || (existingStartMin >= 810 && existingStartMin < 1050)
     const anchorTime = isInWorkingHours ? existingSchedule.startTime : '09:00'
 
-    // 第一层：双向就近安排（排除原日程自身）
+    // 第一层：双向就近安排（排除原日程自身，注入新日程预占）
     const nearest = scheduleStore.findNearestAvailableSlot(
-      targetDate, anchorTime, existingDuration, existingSchedule.id, minStartMin
+      targetDate, anchorTime, existingDuration, existingSchedule.id, minStartMin, newScheduleOccupied
     )
-    // 过滤掉与新日程冲突的推荐
-    const nearestValid = nearest && !(timeToMinutes(nearest.start) < newEnd && timeToMinutes(nearest.end) > newStart && targetDate === ctx.date)
-      ? nearest : null
 
-    if (nearestValid) {
-      logger.info('App/Conflict', `[调整原日程] 就近推荐: ${nearestValid.start}-${nearestValid.end}`)
-      const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin)
-      // 过滤掉与新日程时段冲突的时段
-      const filteredSlots = targetDate === ctx.date
-        ? allSlots.filter(s => !(timeToMinutes(s.start) < newEnd && timeToMinutes(s.end) > newStart))
-        : allSlots
-      conflictData.nearestSlot = { date: targetDate, startTime: nearestValid.start, endTime: nearestValid.end }
-      conflictData.availableSlots = filteredSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
+    if (nearest) {
+      logger.info('App/Conflict', `[调整原日程] 就近推荐: ${nearest.start}-${nearest.end}`)
+      const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin, newScheduleOccupied)
+      conflictData.nearestSlot = { date: targetDate, startTime: nearest.start, endTime: nearest.end }
+      conflictData.availableSlots = allSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
       conflictData.isNextDay = false
       return
     }
 
     // 第二层：当天空闲时段推荐
-    const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin)
-    const filteredSlots = targetDate === ctx.date
-      ? allSlots.filter(s => !(timeToMinutes(s.start) < newEnd && timeToMinutes(s.end) > newStart))
-      : allSlots
-    if (filteredSlots.length > 0) {
-      logger.info('App/Conflict', `[调整原日程] 当天找到 ${filteredSlots.length} 个空闲时段`)
-      conflictData.availableSlots = filteredSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
+    const allSlots = scheduleStore.findAvailableSlots(targetDate, existingDuration, existingSchedule.id, minStartMin, newScheduleOccupied)
+    if (allSlots.length > 0) {
+      logger.info('App/Conflict', `[调整原日程] 当天找到 ${allSlots.length} 个空闲时段`)
+      conflictData.availableSlots = allSlots.map(s => ({ date: targetDate, startTime: s.start, endTime: s.end }))
       conflictData.isNextDay = false
       return
     }
