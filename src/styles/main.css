@@ -84,18 +84,18 @@ body {
 /* 应用布局 */
 .app-layout {
   display: grid;
-  grid-template-columns: 1fr 550px;
+  grid-template-columns: 66fr 34fr;
   height: 100vh;
   overflow: hidden;
 }
 @media (max-width: 1200px) {
   .app-layout {
-    grid-template-columns: 1fr 480px;
+    grid-template-columns: 65fr 35fr;
   }
 }
 @media (max-width: 1024px) {
   .app-layout {
-    grid-template-columns: 1fr 400px;
+    grid-template-columns: 60fr 40fr;
   }
 }
 @media (max-width: 768px) {

@@ -75,6 +75,7 @@ export { parseSkillMd, loadAllSkillFiles } from './skills/skillLoader'
 
 import { createReActEngine, type ReActEngine } from './reactEngine'
 import type { LLMConfig } from '../core/llmCore'
+import type { ContextManager } from '../context/contextManager'
 
 /** 缓存的引擎实例，避免每次调用都重新创建 */
 let cachedEngine: ReActEngine | null = null
@@ -108,6 +109,8 @@ export function initializeReAct(config: LLMConfig): ReActEngine {
 /**
  * 使用 ReAct 模式处理用户查询
  * 复用引擎实例，配置变更时自动重建
+ * 
+ * 集成 ContextManager：传递会话上下文到引擎
  */
 export async function processWithReAct(
   query: string,
@@ -116,6 +119,10 @@ export async function processWithReAct(
     currentDate: string
     scheduleStore: any
     taskStore: any
+    /** 上下文管理器 - 用于追踪会话状态和任务上下文 */
+    contextManager?: ContextManager
+    /** 会话 ID */
+    sessionId?: string
   },
   config: LLMConfig
 ) {
@@ -126,6 +133,17 @@ export async function processWithReAct(
     hasApiKey: !!config.apiKey,
     apiUrl: config.apiUrl
   })
+  
+  // 日志：上下文管理器状态
+  if (context.contextManager && context.sessionId) {
+    const phase = context.contextManager.getCurrentPhase(context.sessionId)
+    const activeTask = context.contextManager.getActiveTask(context.sessionId)
+    console.log('[ReAct] ContextManager 已集成:', {
+      sessionId: context.sessionId,
+      phase,
+      activeTask: activeTask?.skillName || null
+    })
+  }
   
   try {
     const engine = initializeReAct(config)  // 复用缓存引擎

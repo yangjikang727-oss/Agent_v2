@@ -324,7 +324,10 @@ async function processInputWithReAct(text: string) {
         userId,
         currentDate: new Date().toISOString().split('T')[0] || '2024-01-01',
         scheduleStore: scheduleStore,
-        taskStore: taskStore
+        taskStore: taskStore,
+        // ===== 集成 ContextManager =====
+        contextManager: contextManager,
+        sessionId: sessionId
       },
       {
         provider: configStore.llmProvider,
@@ -447,10 +450,13 @@ async function processInputWithReAct(text: string) {
         if (cancelStep) {
           logger.info('App/ReAct', '→ 触发取消日程确认')
           const cancelParams = cancelStep.actionInput || {}
+          logger.info('App/ReAct', `取消参数: ${JSON.stringify(cancelParams)}`)
           showCancelConfirmCard({
             date: cancelParams.date,
             keyword: cancelParams.keyword,
-            type: cancelParams.type
+            type: cancelParams.type,
+            timeRange: cancelParams.timeRange,
+            batchMode: cancelParams.batchMode
           })
           hasModalAction = true
         }
@@ -1847,6 +1853,15 @@ async function handleSubmitTripApplication(data: import('./types').TripApplicati
     taskStore.completeTask(data.taskId)
   }
   
+  // ===== 集成 ContextManager：完成出差申请任务 =====
+  const currentSessionId = 'session_default'
+  const activeTask = contextManager.getActiveTask(currentSessionId)
+  if (activeTask && activeTask.skillName === 'apply_business_trip') {
+    contextManager.completeTask(currentSessionId, true)
+    contextManager.transition(currentSessionId, 'execution_completed')
+    logger.info('App/Trip', `[ContextManager] 任务完成: ${activeTask.skillName}`)
+  }
+  
   if (useReActMode.value) {
     // === ReAct 模式：走 action 链（生成任务 → 询问自动推荐） ===
     messageStore.addSystemMessage(`✅ 出差申请已通过!`)
@@ -2776,6 +2791,15 @@ async function handleSubmitMeeting(data: import('./types').CreateMeetingData, ms
   // 显示成功消息
   messageStore.addSystemMessage(`✅ 会议创建成功：${data.title}`)
   
+  // ===== 集成 ContextManager：完成任务并更新状态 =====
+  const currentSessionId = 'session_default'
+  const activeTask = contextManager.getActiveTask(currentSessionId)
+  if (activeTask && activeTask.skillName === 'book_meeting_room') {
+    contextManager.completeTask(currentSessionId, true)
+    contextManager.transition(currentSessionId, 'execution_completed')
+    logger.info('App/Meeting', `[ContextManager] 任务完成: ${activeTask.skillName}`)
+  }
+  
   // 如果有参会人员，询问是否立即通知
   if (attendees.length > 0) {
     logger.info('App/Meeting', '→ 检测到参会人员，准备询问通知')
@@ -2803,10 +2827,32 @@ async function handleSubmitMeeting(data: import('./types').CreateMeetingData, ms
 // ==================== 取消日程处理 ====================
 
 /**
- * 展示取消确认卡片
- * 根据 ReAct 工具返回的 scheduleId/keyword/date/type 匹配日程
+ * 判断时间是否在指定时间段内
  */
-function showCancelConfirmCard(params: { scheduleId?: string; keyword?: string; date?: string; type?: string }) {
+function isInTimeRange(startTime: string, timeRange: string): boolean {
+  const hour = parseInt(startTime.split(':')[0] || '0', 10)
+  switch (timeRange) {
+    case 'morning': return hour < 12
+    case 'afternoon': return hour >= 12 && hour < 18
+    case 'evening': return hour >= 18
+    case 'all': return true
+    default: return true
+  }
+}
+
+/**
+ * 展示取消确认卡片
+ * 根据 ReAct 工具返回的参数匹配日程
+ * 支持批量模式（如"取消上午的所有会议"）
+ */
+function showCancelConfirmCard(params: { 
+  scheduleId?: string
+  keyword?: string
+  date?: string
+  type?: string
+  timeRange?: string
+  batchMode?: boolean 
+}) {
   const today = scheduleStore.systemCurrentDate || new Date().toISOString().split('T')[0] || ''
   
   // 构建候选列表：所有未来日程
@@ -2817,50 +2863,6 @@ function showCancelConfirmCard(params: { scheduleId?: string; keyword?: string; 
   if (futureSchedules.length === 0) {
     messageStore.addSystemMessage('暂无可取消的日程。')
     return
-  }
-  
-  // 尝试匹配日程
-  let matched: typeof futureSchedules[0] | null = null
-  
-  // 优先用 scheduleId 精确匹配
-  if (params.scheduleId) {
-    matched = futureSchedules.find(s => s.id === params.scheduleId) || null
-  }
-  
-  // 按日期 + 类型 + 关键词模糊匹配
-  if (!matched) {
-    let candidates = [...futureSchedules]
-    
-    if (params.date) {
-      const dateFiltered = candidates.filter(s => s.date === params.date || (s.endDate && params.date! >= s.date && params.date! <= s.endDate))
-      if (dateFiltered.length > 0) candidates = dateFiltered
-    }
-    
-    if (params.type) {
-      const typeMap: Record<string, string> = { meeting: 'meeting', trip: 'trip', '会议': 'meeting', '出差': 'trip' }
-      const mappedType = typeMap[params.type] || params.type
-      const typeFiltered = candidates.filter(s => s.type === mappedType)
-      if (typeFiltered.length > 0) candidates = typeFiltered
-    }
-    
-    if (params.keyword) {
-      const kw = params.keyword.toLowerCase()
-      const kwFiltered = candidates.filter(s => 
-        s.content.toLowerCase().includes(kw) || 
-        s.location?.toLowerCase().includes(kw) ||
-        s.meta?.from?.toLowerCase().includes(kw) ||
-        s.meta?.to?.toLowerCase().includes(kw)
-      )
-      if (kwFiltered.length > 0) candidates = kwFiltered
-    }
-    
-    // 如果过滤后只剩一条，就是匹配结果
-    if (candidates.length === 1) {
-      matched = candidates[0]!
-    } else if (candidates.length > 1 && candidates.length < futureSchedules.length) {
-      // 过滤有效果但仍有多条，取第一条作为推荐
-      matched = candidates[0]!
-    }
   }
   
   // 转换为 ScheduleQueryItem 格式
@@ -2878,11 +2880,73 @@ function showCancelConfirmCard(params: { scheduleId?: string; keyword?: string; 
     meta: s.meta
   })
   
+  // 筛选匹配的日程
+  let candidates = [...futureSchedules]
+  
+  // 优先用 scheduleId 精确匹配（单选模式）
+  if (params.scheduleId) {
+    const matched = futureSchedules.find(s => s.id === params.scheduleId)
+    if (matched) {
+      const cancelData: import('./types').CancelConfirmData = {
+        matchedSchedule: toQueryItem(matched),
+        matchedSchedules: [],
+        allSchedules: futureSchedules.map(toQueryItem),
+        userAction: 'pending',
+        selectedId: null,
+        selectedIds: [],
+        batchMode: false
+      }
+      messageStore.addDataMessage('cancel_confirm', '', cancelData)
+      return
+    }
+  }
+  
+  // 按日期过滤
+  if (params.date) {
+    const dateFiltered = candidates.filter(s => s.date === params.date || (s.endDate && params.date! >= s.date && params.date! <= s.endDate))
+    if (dateFiltered.length > 0) candidates = dateFiltered
+  }
+  
+  // 按时间段过滤（上午/下午/晚上）
+  logger.info('App/Cancel', `时间段过滤: timeRange=${params.timeRange}, 过滤前数量=${candidates.length}`)
+  if (params.timeRange && params.timeRange !== 'all') {
+    const timeFiltered = candidates.filter(s => isInTimeRange(s.startTime, params.timeRange!))
+    logger.info('App/Cancel', `时间段过滤后数量: ${timeFiltered.length}`)
+    if (timeFiltered.length > 0) candidates = timeFiltered
+  }
+  
+  // 按类型过滤
+  if (params.type) {
+    const typeMap: Record<string, string> = { meeting: 'meeting', trip: 'trip', '会议': 'meeting', '出差': 'trip' }
+    const mappedType = typeMap[params.type] || params.type
+    const typeFiltered = candidates.filter(s => s.type === mappedType)
+    if (typeFiltered.length > 0) candidates = typeFiltered
+  }
+  
+  // 按关键词过滤
+  if (params.keyword) {
+    const kw = params.keyword.toLowerCase()
+    const kwFiltered = candidates.filter(s => 
+      s.content.toLowerCase().includes(kw) || 
+      s.location?.toLowerCase().includes(kw) ||
+      s.meta?.from?.toLowerCase().includes(kw) ||
+      s.meta?.to?.toLowerCase().includes(kw)
+    )
+    if (kwFiltered.length > 0) candidates = kwFiltered
+  }
+  
+  // 判断是否批量模式
+  const isBatchMode = params.batchMode === true || candidates.length > 1
+  
+  // 构建确认数据
   const cancelData: import('./types').CancelConfirmData = {
-    matchedSchedule: matched ? toQueryItem(matched) : null,
+    matchedSchedule: (!isBatchMode && candidates.length === 1) ? toQueryItem(candidates[0]!) : null,
+    matchedSchedules: isBatchMode ? candidates.map(toQueryItem) : [],
     allSchedules: futureSchedules.map(toQueryItem),
     userAction: 'pending',
-    selectedId: null
+    selectedId: null,
+    selectedIds: [],
+    batchMode: isBatchMode
   }
   
   messageStore.addDataMessage('cancel_confirm', '', cancelData)
@@ -2930,6 +2994,49 @@ function handleConfirmCancelSchedule(scheduleId: string, msgId: number) {
  */
 function handleReselectCancelSchedule(scheduleId: string, msgId: number) {
   handleConfirmCancelSchedule(scheduleId, msgId)
+}
+
+/**
+ * 批量取消日程
+ */
+function handleBatchConfirmCancelSchedule(scheduleIds: string[], msgId: number) {
+  const cancelledNames: string[] = []
+  
+  for (const scheduleId of scheduleIds) {
+    const schedule = scheduleStore.getSchedule(scheduleId)
+    if (!schedule) continue
+    
+    cancelledNames.push(schedule.content)
+    
+    // 清理关联的任务
+    const relatedTasks = taskStore.pendingTasks.filter(t => t.scheduleId === scheduleId)
+    relatedTasks.forEach(t => taskStore.completeTask(t.id))
+    
+    // 删除日程
+    scheduleStore.deleteSchedule(scheduleId)
+  }
+  
+  // 更新卡片状态
+  const existingMsg = messageStore.messages.find(m => m.id === msgId)
+  const existingData = existingMsg?.data as import('./types').CancelConfirmData | undefined
+  if (existingData) {
+    messageStore.updateMessage(msgId, {
+      data: {
+        ...existingData,
+        userAction: 'cancelled' as const,
+        selectedIds: scheduleIds
+      } satisfies import('./types').CancelConfirmData
+    })
+  }
+  
+  // 反馈消息
+  if (cancelledNames.length === 1) {
+    messageStore.addSystemMessage(`✅ 已取消日程「${cancelledNames[0]}」`)
+  } else if (cancelledNames.length > 1) {
+    messageStore.addSystemMessage(`✅ 已批量取消 ${cancelledNames.length} 个日程：\n${cancelledNames.map(n => `• ${n}`).join('\n')}`)
+  }
+  
+  logger.info('App/Cancel', `批量取消日程: ${scheduleIds.join(', ')}`)
 }
 
 // ==================== 修改日程处理 ====================
@@ -3196,6 +3303,7 @@ onUnmounted(() => {
       @change-order="handleChangeOrder"
       @submit-meeting="handleSubmitMeeting"
       @confirm-cancel-schedule="handleConfirmCancelSchedule"
+      @batch-confirm-cancel-schedule="handleBatchConfirmCancelSchedule"
       @reselect-cancel-schedule="handleReselectCancelSchedule"
       @confirm-edit-schedule="handleConfirmEditSchedule"
       @reselect-edit-schedule="handleReselectEditSchedule"

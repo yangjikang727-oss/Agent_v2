@@ -27,10 +27,11 @@ export const useMessageStore = defineStore('message', () => {
   let nextId = 1
 
   // 添加消息
-  function addMessage(message: Omit<Message, 'id'>) {
+  function addMessage(message: Omit<Message, 'id' | 'timestamp'>) {
     const newMessage = {
       ...message,
-      id: nextId++
+      id: nextId++,
+      timestamp: Date.now()
     }
     messages.value.push(newMessage)
     console.log('[MessageStore] ➕ 添加消息:', {

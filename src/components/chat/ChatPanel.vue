@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, computed } from 'vue'
 import type { Message, Task, ResourceCardData, TransportSelectorData, AttendeeTableData, TransportOption, ParamConfirmData, ScheduleListData, FlightListData, HotelListData, TripApplicationData, NotifyOptionData, Schedule, ConflictResolutionData, ScheduleQueryResultData, CreateMeetingData, CancelConfirmData, EditConfirmData } from '../../types'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
@@ -70,6 +70,7 @@ const emit = defineEmits<{
   changeOrder: [orderId: string, orderType: 'flight' | 'hotel', data: import('../../types/message').PaymentOrderData, msgId: number]
   submitMeeting: [data: CreateMeetingData, msgId: number]
   confirmCancelSchedule: [scheduleId: string, msgId: number]
+  batchConfirmCancelSchedule: [scheduleIds: string[], msgId: number]
   reselectCancelSchedule: [scheduleId: string, msgId: number]
   confirmEditSchedule: [scheduleId: string, msgId: number]
   reselectEditSchedule: [scheduleId: string, msgId: number]
@@ -91,6 +92,49 @@ function scrollToBottom() {
 watch(() => props.messages.length, () => {
   scrollToBottom()
 })
+
+// 格式化时间戳为微信样式
+function formatTimestamp(timestamp?: number): string {
+  if (!timestamp) return '刚刚'
+  const date = new Date(timestamp)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const msgDate = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const diffDays = Math.floor((msgDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+  
+  const hours = date.getHours().toString().padStart(2, '0')
+  const minutes = date.getMinutes().toString().padStart(2, '0')
+  const timeStr = `${hours}:${minutes}`
+  
+  if (diffDays === 0) {
+    return timeStr  // 今天只显示时间
+  } else if (diffDays === -1) {
+    return `昨天 ${timeStr}`
+  } else if (diffDays === -2) {
+    return `前天 ${timeStr}`
+  } else {
+    const month = date.getMonth() + 1
+    const day = date.getDate()
+    return `${month}月${day}日 ${timeStr}`
+  }
+}
+
+// 判断是否需要显示时间戳（与上一条消息间隔超过5分钟）
+function shouldShowTimestamp(index: number): boolean {
+  if (index === 0) return true
+  const currentMsg = props.messages[index]
+  const prevMsg = props.messages[index - 1]
+  if (!currentMsg || !prevMsg) return true
+  // 如果两条消息都没有时间戳，不显示
+  if (!currentMsg.timestamp && !prevMsg.timestamp) return false
+  // 如果当前消息没有时间戳但上一条有，不显示
+  if (!currentMsg.timestamp) return false
+  // 如果上一条消息没有时间戳但当前有，显示
+  if (!prevMsg.timestamp) return true
+  // 都有时间戳，判断间隔
+  const diff = currentMsg.timestamp - prevMsg.timestamp
+  return diff > 5 * 60 * 1000  // 5分钟
+}
 
 // 使用建议
 function useSuggestion(chip: string) {
@@ -226,12 +270,20 @@ defineExpose({
       </div>
 
       <!-- Messages -->
-      <TransitionGroup name="slide-up">
-        <ChatMessage 
-          v-for="msg in messages" 
-          :key="msg.id" 
-          :message="msg"
-        >
+      <TransitionGroup name="slide-up" tag="div" class="space-y-5">
+        <div v-for="(msg, index) in messages" :key="msg.id" class="message-group">
+          <!-- 时间戳 -->
+          <div 
+            v-if="shouldShowTimestamp(index)" 
+            class="flex justify-center mb-3 mt-2"
+          >
+            <span class="px-3 py-1 bg-gray-200/70 text-gray-500 text-xs rounded-full">
+              {{ formatTimestamp(msg.timestamp) }}
+            </span>
+          </div>
+          <ChatMessage 
+            :message="msg"
+          >
           <!-- Action List -->
           <ActionList 
             v-if="isActionList(msg)"
@@ -350,6 +402,7 @@ defineExpose({
             v-if="isCancelConfirm(msg)"
             :data="msg.data"
             @confirm="(id) => emit('confirmCancelSchedule', id, msg.id)"
+            @batchConfirm="(ids) => emit('batchConfirmCancelSchedule', ids, msg.id)"
             @reselect="(id) => emit('reselectCancelSchedule', id, msg.id)"
           />
 
@@ -361,6 +414,7 @@ defineExpose({
             @reselect="(id) => emit('reselectEditSchedule', id, msg.id)"
           />
         </ChatMessage>
+        </div>
       </TransitionGroup>
 
       <!-- Thinking Indicator -->

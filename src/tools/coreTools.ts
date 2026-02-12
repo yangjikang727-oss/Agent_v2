@@ -22,6 +22,8 @@ import { skillStore } from '../services/react/skills/skillStore'
  * OpenCode 核心机制：Agent 在系统提示中看到可用技能列表（name + description），
  * 当识别到用户意图可能匹配某个技能时，调用此工具获取完整操作指南，
  * 然后按指令中的步骤执行后续动作。
+ * 
+ * 集成 ContextManager：加载技能时自动创建任务上下文，追踪参数收集状态
  */
 export const loadSkillTool: Tool = {
   name: 'load_skill',
@@ -35,7 +37,7 @@ export const loadSkillTool: Tool = {
       required: true
     }
   ],
-  execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
+  execute: async (params: Record<string, any>, context: ToolContext): Promise<ToolResult> => {
     try {
       const { name } = params as { name: string }
       
@@ -53,6 +55,25 @@ export const loadSkillTool: Tool = {
           success: false,
           error: `技能 "${name}" 不存在。可用技能: ${stats.names.join(', ')}`
         }
+      }
+
+      // ===== 集成 ContextManager：创建任务上下文 =====
+      if (context.contextManager && context.sessionId) {
+        // 从技能指令中提取必需参数列表
+        const requiredParams = extractRequiredParams(skill.instruction.instructions)
+        
+        // 在 contextManager 中启动任务
+        context.contextManager.startTask(
+          context.sessionId,
+          name,
+          {}, // 初始参数为空
+          requiredParams
+        )
+        
+        // 触发状态转换到 collecting 阶段
+        context.contextManager.transition(context.sessionId, 'intent_recognized')
+        
+        console.log(`[load_skill] 已创建任务上下文: ${name}, 待收集参数: ${requiredParams.join(', ')}`)
       }
 
       // 返回纯文本格式的技能指令，让 LLM 直接阅读（而非 JSON 嵌套）
@@ -78,10 +99,42 @@ export const loadSkillTool: Tool = {
 }
 
 /**
+ * 从技能指令中提取必需参数列表
+ */
+function extractRequiredParams(instructions: string): string[] {
+  const params: string[] = []
+  
+  // 匹配 "必填" 或 "required" 标记的参数
+  const requiredPattern = /[*\-]\s*(\w+)[:\uff1a].*(?:\u5fc5\u586b|required|\*)/gi
+  let match
+  while ((match = requiredPattern.exec(instructions)) !== null) {
+    if (match[1]) {
+      params.push(match[1])
+    }
+  }
+  
+  // 如果没有显式标记，尝试从参数列表中提取
+  if (params.length === 0) {
+    // 常见的日程类参数
+    const commonParams = ['title', 'date', 'startTime', 'endTime', 'from', 'to', 'startDate', 'endDate']
+    const lowerInstructions = instructions.toLowerCase()
+    for (const p of commonParams) {
+      if (lowerInstructions.includes(p.toLowerCase())) {
+        params.push(p)
+      }
+    }
+  }
+  
+  return params
+}
+
+/**
  * trigger_action 工具 - 通用 UI 动作触发器
  * 
  * Agent 阅读技能指令后，调用此工具触发对应的 UI 动作（如打开会议表单、出差申请表单）。
  * 参数由 Agent 根据技能指令中的参数说明 + 用户输入自主提取。
+ * 
+ * 集成 ContextManager：触发动作时更新任务参数，记录已收集的参数
  */
 export const triggerActionTool: Tool = {
   name: 'trigger_action',
@@ -101,12 +154,40 @@ export const triggerActionTool: Tool = {
       required: false
     }
   ],
-  execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
+  execute: async (params: Record<string, any>, context: ToolContext): Promise<ToolResult> => {
     try {
       const { action, params: actionParams } = params as { action: string; params?: Record<string, any> }
       
       if (!action) {
         return { success: false, error: '缺少动作名称参数' }
+      }
+
+      // ===== 集成 ContextManager：更新任务参数 =====
+      if (context.contextManager && context.sessionId) {
+        const activeTask = context.contextManager.getActiveTask(context.sessionId)
+        
+        if (activeTask && actionParams) {
+          // 更新已收集的参数
+          context.contextManager.updateTaskParams(context.sessionId, actionParams)
+          
+          // 触发状态转换到 confirming 阶段
+          context.contextManager.transition(context.sessionId, 'params_complete')
+          
+          console.log(`[trigger_action] 已更新任务参数:`, actionParams)
+          console.log(`[trigger_action] 任务状态: ${activeTask.skillName} -> confirming`)
+        }
+        
+        // 记录动作语义到消息历史
+        const history = context.contextManager.getHistory(context.sessionId)
+        if (history.length > 0) {
+          const lastMsg = history[history.length - 1]
+          if (lastMsg) {
+            context.contextManager.updateMessageSemantics(context.sessionId, lastMsg.id, {
+              intent: action,
+              slots: actionParams
+            })
+          }
+        }
       }
 
       return {
@@ -353,10 +434,11 @@ export const conflictDetectorTool: Tool = {
 /**
  * 取消日程工具
  * 根据用户描述匹配并展示取消确认卡片
+ * 支持批量取消（如"取消上午的所有会议"）
  */
 export const cancelScheduleTool: Tool = {
   name: 'cancel_schedule',
-  description: '取消/删除一个日程。根据日期、类型、关键词匹配日程并展示确认卡片',
+  description: '取消/删除日程。根据日期、时间段、类型、关键词匹配日程并展示确认卡片。支持批量取消（如"取消上午的所有会议"）。【重要】当用户提到"上午"、"早上"时必须设置timeRange=morning；"下午"设置timeRange=afternoon；"晚上"设置timeRange=evening',
   category: 'schedule',
   parameters: [
     {
@@ -364,6 +446,13 @@ export const cancelScheduleTool: Tool = {
       type: 'string',
       description: '要取消的日程日期 (YYYY-MM-DD格式)',
       required: false
+    },
+    {
+      name: 'timeRange',
+      type: 'string',
+      description: '【必须识别】时间段过滤。用户说"上午/早上"→morning，"下午"→afternoon，"晚上"→evening。morning=12:00前，afternoon=12:00-18:00，evening=18:00后',
+      required: false,
+      enum: ['morning', 'afternoon', 'evening', 'all']
     },
     {
       name: 'keyword',
@@ -377,6 +466,13 @@ export const cancelScheduleTool: Tool = {
       description: '日程类型：meeting(会议)、trip(出差)、general(普通)',
       required: false,
       enum: ['meeting', 'trip', 'general']
+    },
+    {
+      name: 'batchMode',
+      type: 'boolean',
+      description: '是否批量模式。当用户说"所有"、"全部"等词时设为true',
+      required: false,
+      default: false
     }
   ],
   execute: async (params: Record<string, any>, _context: ToolContext): Promise<ToolResult> => {
@@ -386,8 +482,10 @@ export const cancelScheduleTool: Tool = {
         data: {
           action: 'show_cancel_confirm',
           date: params.date || null,
+          timeRange: params.timeRange || null,
           keyword: params.keyword || null,
-          type: params.type || null
+          type: params.type || null,
+          batchMode: params.batchMode || false
         }
       }
     } catch (error) {
