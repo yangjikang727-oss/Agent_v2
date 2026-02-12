@@ -68,7 +68,6 @@ export {
 
 // 导出新版 Skill 模块
 export { skillStore } from './skills/skillStore'
-export type { SkillMatchResult } from './skills/skillStore'
 export type { SkillMetadata, SkillInstruction, ParsedSkill } from './skills/skillLoader'
 export { parseSkillMd, loadAllSkillFiles } from './skills/skillLoader'
 

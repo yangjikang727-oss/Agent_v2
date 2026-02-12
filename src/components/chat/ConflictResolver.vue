@@ -62,7 +62,12 @@ const isShowMorePhase = computed(() => {
 })
 
 const isDirectSlotPhase = computed(() => {
-  return props.data.adjustTarget !== 'pending' && !props.data.nearestSlot && props.data.userAction === 'pending'
+  return props.data.adjustTarget !== 'pending' && !props.data.nearestSlot && props.data.userAction === 'pending' && !props.data.noSlotsMessage
+})
+
+// 无可用时段状态
+const isNoSlotsPhase = computed(() => {
+  return !!props.data.noSlotsMessage && props.data.userAction !== 'cancelled'
 })
 
 const isDone = computed(() => {
@@ -261,6 +266,62 @@ const adjustTargetLabel = computed(() => {
       <i class="fa-solid fa-ban"></i>
       已取消创建
     </div>
+
+    <!-- ========== 无可用时段（带操作按钮） ========== -->
+    <template v-if="isNoSlotsPhase">
+      <div class="bg-red-50 border-l-4 border-red-400 p-3 rounded">
+        <div class="font-bold text-red-600 text-xs mb-1 flex items-center gap-1">
+          <i class="fa-solid fa-circle-xmark"></i>
+          无可用时段
+        </div>
+        <div class="text-sm text-gray-700">{{ data.noSlotsMessage }}</div>
+      </div>
+
+      <div class="flex items-center gap-2 flex-wrap">
+        <button
+          @click="toggleDatePanel"
+          :class="[
+            'px-4 py-2 rounded-lg text-xs font-medium transition-all border cursor-pointer',
+            showDatePanel
+              ? 'bg-blue-100 text-blue-700 border-blue-400'
+              : 'bg-indigo-500 text-white border-indigo-500 hover:bg-indigo-600 shadow-sm'
+          ]"
+        >
+          <i class="fa-solid fa-calendar-days mr-1"></i> 选择其他日期
+        </button>
+        <button
+          @click="handleCancel"
+          class="px-4 py-2 rounded-lg text-xs font-medium transition-all border bg-white text-red-500 border-red-200 hover:bg-red-50 cursor-pointer"
+        >
+          <i class="fa-solid fa-xmark mr-1"></i> 取消创建
+        </button>
+      </div>
+
+      <!-- 日期选择面板 -->
+      <div v-if="showDatePanel" class="bg-gray-50 rounded-lg p-3 border border-gray-200 space-y-2">
+        <div class="text-xs text-gray-500 font-medium">选择日期查看空闲时段：</div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <input
+            type="date"
+            v-model="customDate"
+            :min="minDate"
+            class="px-2 py-1.5 rounded-md text-xs border border-gray-300 focus:border-indigo-400 focus:ring-1 focus:ring-indigo-200 outline-none"
+          />
+          <button
+            @click="handleDateConfirm"
+            :disabled="!customDate"
+            :class="[
+              'px-3 py-1.5 rounded-md text-xs font-medium transition-all',
+              customDate
+                ? 'bg-indigo-500 text-white hover:bg-indigo-600 cursor-pointer'
+                : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+            ]"
+          >
+            确定
+          </button>
+        </div>
+      </div>
+    </template>
 
     <!-- ========== 展示更多时段 / 直接展示时段 ========== -->
     <template v-if="isShowMorePhase || isDirectSlotPhase">
