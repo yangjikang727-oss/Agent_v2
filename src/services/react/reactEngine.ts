@@ -5,6 +5,11 @@
  * 第一层：加载所有 SKILL.md 元数据，LLM 动态识别日程类型
  * 第二层：加载匹配 Skill 的指令，LLM 提取参数
  * 第三层：按 Skill 声明的 action 弹出预填充表单
+ * 
+ * 集成 ContextManager：
+ * - 在推理循环中使用会话状态机
+ * - 工具执行时传递 contextManager 和 sessionId
+ * - 利用对话历史和任务上下文增强推理能力
  */
 
 import type { LLMConfig } from '../core/llmCore'
@@ -13,6 +18,7 @@ import { toolRegistry, type ToolContext, type ToolResult } from './toolRegistry'
 import { REACT_PROMPTS, parseReActResponse, formatObservation, type ReActStep } from './reactPrompts'
 import { skillStore } from './skills/skillStore'
 import type { BrainState } from '../../types'
+import type { ContextManager } from '../context/contextManager'
 
 // ==================== ReAct引擎配置 ====================
 
@@ -245,6 +251,10 @@ export class ReActEngine {
    * 1. [第一层] 加载所有 Skill 元数据 → LLM 动态匹配日程类型
    * 2. [第二层] 加载匹配 Skill 的指令 → LLM 提取参数
    * 3. [第三层] 按 Skill 声明的 action → 弹出预填充表单
+   * 
+   * 集成 ContextManager：
+   * - 使用对话历史作为 LLM 上下文
+   * - 传递 contextManager 到工具执行上下文
    */
   async processQuery(
     query: string,
@@ -254,6 +264,10 @@ export class ReActEngine {
       scheduleStore: any
       taskStore: any
       brainState?: BrainState
+      /** 上下文管理器 - 用于追踪会话状态和任务上下文 */
+      contextManager?: ContextManager
+      /** 会话 ID */
+      sessionId?: string
     }
   ): Promise<{
     finalAnswer: string
@@ -267,7 +281,10 @@ export class ReActEngine {
       currentDate: context.currentDate,
       scheduleStore: context.scheduleStore,
       taskStore: context.taskStore,
-      config: this.config
+      config: this.config,
+      // ===== 集成 ContextManager =====
+      contextManager: context.contextManager,
+      sessionId: context.sessionId
     }
     
     try {
@@ -277,10 +294,38 @@ export class ReActEngine {
       const toolsSummary = toolRegistry.getToolsSummary()
       const availableSkills = skillStore.getMetadataSummary()
       
+      // ===== 集成 ContextManager：获取对话历史和任务上下文 =====
+      let conversationContext = ''
+      let activeTaskInfo = ''
+      
+      if (context.contextManager && context.sessionId) {
+        // 获取压缩后的对话历史
+        const history = context.contextManager.getFormattedHistory(context.sessionId)
+        if (history) {
+          conversationContext = `\n\n【对话历史】\n${history}\n`
+        }
+        
+        // 获取当前活跃任务信息
+        const activeTask = context.contextManager.getActiveTask(context.sessionId)
+        if (activeTask) {
+          const pendingParams = activeTask.pendingParams.length > 0 
+            ? `待收集: ${activeTask.pendingParams.join(', ')}`
+            : '参数已完整'
+          activeTaskInfo = `\n\n【当前任务】\n技能: ${activeTask.skillName}\n状态: ${activeTask.status}\n已收集: ${JSON.stringify(activeTask.collectedParams)}\n${pendingParams}\n`
+        }
+        
+        // 获取会话阶段
+        const phase = context.contextManager.getCurrentPhase(context.sessionId)
+        this.log(`[ReAct] 当前会话阶段: ${phase}`)
+      }
+      
       // 构建单轮对话 messages 数组
+      const systemPrompt = REACT_PROMPTS.SYSTEM(toolsSummary, context.currentDate, availableSkills)
+      const userPrompt = `${conversationContext}${activeTaskInfo}用户请求：${query}`
+      
       const messages: Array<{role: string, content: string}> = [
-        { role: 'system', content: REACT_PROMPTS.SYSTEM(toolsSummary, context.currentDate, availableSkills) },
-        { role: 'user', content: `用户请求：${query}` }
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
       ]
       
       let toolNotFoundCount = 0  // 连续工具未找到计数器

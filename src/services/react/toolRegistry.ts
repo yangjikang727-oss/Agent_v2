@@ -12,6 +12,8 @@ import type { ToolProvider, ToolAdapter } from './toolAdapter'
 
 // ==================== 工具类型定义 ====================
 
+import type { ContextManager } from '../context/contextManager'
+
 /** 工具参数定义 */
 export interface ToolParameter {
   name: string
@@ -29,6 +31,10 @@ export interface ToolContext {
   scheduleStore: any // 实际类型将在集成时确定
   taskStore: any
   config: any
+  /** 上下文管理器 - 用于追踪会话状态和任务上下文 */
+  contextManager?: ContextManager
+  /** 会话 ID - 关联 contextManager 中的会话 */
+  sessionId?: string
 }
 
 /** 工具执行结果 */

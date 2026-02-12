@@ -119,9 +119,9 @@ function groupByDate(schedules: ScheduleQueryItem[]): Array<{ date: string; labe
           <div class="flex flex-col items-center shrink-0 pt-0.5">
             <div class="w-3 h-3 rounded-full shrink-0" :class="getTypeConfig(item.type).dot"></div>
             <div class="flex flex-col items-center mt-2 leading-tight">
-              <span class="text-sm font-bold text-gray-700">{{ formatTime(item.startTime) }}</span>
-              <span class="text-xs text-gray-300 leading-none">~</span>
-              <span class="text-xs text-gray-400">{{ formatTime(item.endTime) }}</span>
+              <span class="text-sm font-bold text-gray-700 font-mono">{{ formatTime(item.startTime) }}</span>
+              <span class="text-[10px] text-gray-300 my-0.5">—</span>
+              <span class="text-xs text-gray-500 font-mono">{{ formatTime(item.endTime) }}</span>
             </div>
           </div>
 
@@ -138,20 +138,16 @@ function groupByDate(schedules: ScheduleQueryItem[]): Array<{ date: string; labe
 
             <!-- 详情信息分行显示 -->
             <div class="flex flex-col gap-2 mt-2.5">
-              <!-- 地点 -->
-              <div v-if="item.location" class="flex items-center gap-1.5 text-xs text-gray-500">
+              <!-- 地点（出差有路线时不显示，避免冗余） -->
+              <div v-if="item.location && !(item.type === 'trip' && item.meta?.from && item.meta?.to)" class="flex items-center gap-1.5 text-xs text-gray-500">
                 <i class="fa-solid fa-location-dot text-[10px] text-gray-400 w-3.5 text-center"></i>
                 {{ item.location }}
               </div>
-              <!-- 出差: 路线 -->
+              <!-- 出差: 路线 + 交通方式（合并显示） -->
               <div v-if="item.type === 'trip' && item.meta?.from && item.meta?.to" class="flex items-center gap-1.5 text-xs text-purple-600">
                 <i class="fa-solid fa-route text-[10px] text-purple-400 w-3.5 text-center"></i>
                 {{ item.meta.from }} → {{ item.meta.to }}
-              </div>
-              <!-- 出差: 出行方式 -->
-              <div v-if="item.type === 'trip' && item.meta?.transport" class="flex items-center gap-1.5 text-xs text-gray-500">
-                <i class="fa-solid fa-car-side text-[10px] text-gray-400 w-3.5 text-center"></i>
-                {{ formatTransport(item.meta.transport) }}
+                <span v-if="item.meta?.transport" class="text-gray-400">（{{ formatTransport(item.meta.transport) }}）</span>
               </div>
               <!-- 跨天返程 -->
               <div v-if="item.endDate && item.endDate !== item.date" class="flex items-center gap-1.5 text-xs text-gray-500">

@@ -276,10 +276,13 @@ export interface ScheduleQueryResultData {
 
 // 取消日程确认数据
 export interface CancelConfirmData {
-  matchedSchedule: ScheduleQueryItem | null  // 系统匹配到的日程
+  matchedSchedule: ScheduleQueryItem | null  // 系统匹配到的单个日程（单选模式）
+  matchedSchedules: ScheduleQueryItem[]      // 系统匹配到的多个日程（批量模式）
   allSchedules: ScheduleQueryItem[]          // 全部候选日程（用于重新选择）
   userAction: 'pending' | 'cancelled' | 'kept'  // 用户操作状态
-  selectedId: string | null                  // 最终选中要取消的日程ID
+  selectedId: string | null                  // 最终选中要取消的日程ID（单选）
+  selectedIds: string[]                      // 批量选中要取消的日程ID列表
+  batchMode: boolean                         // 是否批量模式
 }
 
 // 修改日程确认数据
@@ -298,4 +301,5 @@ export interface Message {
   content: string
   thoughts?: string[]
   data?: Task[] | ResourceCardData | TransportSelectorData | AttendeeTableData | ParamConfirmData | ScheduleListData | FlightListData | HotelListData | TripApplicationData | NotifyOptionData | PaymentOrderData | ConflictResolutionData | ScheduleQueryResultData | CreateMeetingData | CancelConfirmData | EditConfirmData | null
+  timestamp?: number  // 消息时间戳（毫秒）
 }

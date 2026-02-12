@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import type { CancelConfirmData, ScheduleQueryItem } from '../../types'
 
 const props = defineProps<{
@@ -8,10 +8,50 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   confirm: [scheduleId: string]
+  batchConfirm: [scheduleIds: string[]]
   reselect: [scheduleId: string]
 }>()
 
 const showAll = ref(false)
+const selectedIds = ref<Set<string>>(new Set())
+
+// 批量模式下，初始化选中所有匹配的日程
+if (props.data.batchMode && props.data.matchedSchedules.length > 0) {
+  props.data.matchedSchedules.forEach(s => selectedIds.value.add(s.id))
+}
+
+// 是否全选
+const isAllSelected = computed(() => {
+  const targets = props.data.batchMode ? props.data.matchedSchedules : props.data.allSchedules
+  return targets.length > 0 && targets.every(s => selectedIds.value.has(s.id))
+})
+
+// 切换单个选中
+function toggleSelect(id: string) {
+  if (selectedIds.value.has(id)) {
+    selectedIds.value.delete(id)
+  } else {
+    selectedIds.value.add(id)
+  }
+}
+
+// 全选/取消全选
+function toggleSelectAll() {
+  const targets = props.data.batchMode ? props.data.matchedSchedules : props.data.allSchedules
+  if (isAllSelected.value) {
+    targets.forEach(s => selectedIds.value.delete(s.id))
+  } else {
+    targets.forEach(s => selectedIds.value.add(s.id))
+  }
+}
+
+// 批量取消
+function handleBatchConfirm() {
+  const ids = Array.from(selectedIds.value)
+  if (ids.length > 0) {
+    emit('batchConfirm', ids)
+  }
+}
 
 // 格式化日期
 function formatDate(dateStr: string): string {
@@ -49,7 +89,7 @@ function getTypeIcon(type: string): string {
   return icons[type] || 'fa-calendar'
 }
 
-// 从候选列表中选择了一条
+// 从候选列表中选择了一条（单选模式）
 function handleSelectFromList(item: ScheduleQueryItem) {
   emit('reselect', item.id)
 }
@@ -63,7 +103,9 @@ const isDone = () => props.data.userAction !== 'pending'
     <template v-if="isDone()">
       <div v-if="data.userAction === 'cancelled'" class="flex items-center gap-2 p-3 bg-red-50 rounded-xl border border-red-200">
         <i class="fa-solid fa-circle-check text-red-500"></i>
-        <span class="text-sm text-red-700 font-medium">日程已取消</span>
+        <span class="text-sm text-red-700 font-medium">
+          {{ data.selectedIds && data.selectedIds.length > 1 ? `已取消 ${data.selectedIds.length} 个日程` : '日程已取消' }}
+        </span>
       </div>
       <div v-else-if="data.userAction === 'kept'" class="flex items-center gap-2 p-3 bg-gray-50 rounded-xl border border-gray-200">
         <i class="fa-solid fa-rotate-left text-gray-500"></i>
@@ -73,53 +115,128 @@ const isDone = () => props.data.userAction !== 'pending'
 
     <!-- 等待用户操作 -->
     <template v-else>
-      <!-- 匹配到的日程 -->
-      <div v-if="data.matchedSchedule" class="space-y-3">
-        <div class="text-xs text-gray-500 mb-1">
-          <i class="fa-solid fa-crosshairs mr-1"></i> 识别到以下日程，是否取消？
-        </div>
-
-        <div class="p-3 bg-white rounded-xl border-2 border-red-200 shadow-sm">
-          <div class="flex items-center gap-3">
-            <div :class="['w-10 h-10 rounded-lg flex items-center justify-center shrink-0', getTypeColor(data.matchedSchedule.type)]">
-              <i :class="['fa-solid', getTypeIcon(data.matchedSchedule.type)]"></i>
+      <!-- ========== 批量模式 ========== -->
+      <template v-if="data.batchMode && data.matchedSchedules.length > 0">
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="text-xs text-gray-500">
+              <i class="fa-solid fa-layer-group mr-1"></i> 
+              识别到 <span class="font-bold text-red-500">{{ data.matchedSchedules.length }}</span> 个日程，请确认取消：
             </div>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-0.5">
-                <span class="text-sm font-bold text-gray-800 truncate">{{ data.matchedSchedule.content }}</span>
-                <span :class="['text-[10px] px-1.5 py-0.5 rounded-full font-medium', getTypeColor(data.matchedSchedule.type)]">
-                  {{ getTypeLabel(data.matchedSchedule.type) }}
-                </span>
+            <button 
+              @click="toggleSelectAll"
+              class="text-xs text-blue-500 hover:text-blue-600"
+            >
+              {{ isAllSelected ? '取消全选' : '全选' }}
+            </button>
+          </div>
+
+          <!-- 批量列表 -->
+          <div class="space-y-1.5 max-h-64 overflow-y-auto">
+            <div
+              v-for="item in data.matchedSchedules"
+              :key="item.id"
+              @click="toggleSelect(item.id)"
+              :class="[
+                'flex items-center gap-3 p-2.5 rounded-xl border cursor-pointer transition',
+                selectedIds.has(item.id) 
+                  ? 'bg-red-50 border-red-300 shadow-sm' 
+                  : 'bg-white border-gray-100 hover:border-red-200'
+              ]"
+            >
+              <!-- 复选框 -->
+              <div :class="[
+                'w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition',
+                selectedIds.has(item.id) 
+                  ? 'bg-red-500 border-red-500 text-white' 
+                  : 'border-gray-300'
+              ]">
+                <i v-if="selectedIds.has(item.id)" class="fa-solid fa-check text-[10px]"></i>
               </div>
-              <div class="text-xs text-gray-400">
-                {{ formatDate(data.matchedSchedule.date) }} · {{ data.matchedSchedule.startTime }} - {{ data.matchedSchedule.endTime }}
-                <span v-if="data.matchedSchedule.location" class="ml-1">
-                  · <i class="fa-solid fa-location-dot"></i> {{ data.matchedSchedule.location }}
-                </span>
+              
+              <div :class="['w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm', getTypeColor(item.type)]">
+                <i :class="['fa-solid', getTypeIcon(item.type)]"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-sm font-bold text-gray-800 truncate">
+                  {{ item.content }}
+                </div>
+                <div class="text-[10px] text-gray-400 mt-0.5">
+                  {{ formatDate(item.date) }} · {{ item.startTime }} - {{ item.endTime }}
+                  <span v-if="item.location" class="ml-1">· {{ item.location }}</span>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- 操作按钮 -->
+          <!-- 批量操作按钮 -->
           <div class="flex gap-2 mt-3">
             <button
-              @click="emit('confirm', data.matchedSchedule!.id)"
-              class="flex-1 px-3 py-2 bg-red-500 text-white text-xs font-medium rounded-lg hover:bg-red-600 transition"
+              @click="handleBatchConfirm"
+              :disabled="selectedIds.size === 0"
+              :class="[
+                'flex-1 px-3 py-2 text-white text-xs font-medium rounded-lg transition',
+                selectedIds.size > 0 
+                  ? 'bg-red-500 hover:bg-red-600' 
+                  : 'bg-gray-300 cursor-not-allowed'
+              ]"
             >
-              <i class="fa-solid fa-trash-can mr-1"></i> 确认取消
-            </button>
-            <button
-              @click="showAll = true"
-              class="flex-1 px-3 py-2 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-200 transition"
-            >
-              <i class="fa-solid fa-arrows-rotate mr-1"></i> 不是这个
+              <i class="fa-solid fa-trash-can mr-1"></i> 
+              取消选中的 {{ selectedIds.size }} 个日程
             </button>
           </div>
         </div>
-      </div>
+      </template>
+
+      <!-- ========== 单选模式：匹配到的日程 ========== -->
+      <template v-else-if="data.matchedSchedule">
+        <div class="space-y-3">
+          <div class="text-xs text-gray-500 mb-1">
+            <i class="fa-solid fa-crosshairs mr-1"></i> 识别到以下日程，是否取消？
+          </div>
+
+          <div class="p-3 bg-white rounded-xl border-2 border-red-200 shadow-sm">
+            <div class="flex items-center gap-3">
+              <div :class="['w-10 h-10 rounded-lg flex items-center justify-center shrink-0', getTypeColor(data.matchedSchedule.type)]">
+                <i :class="['fa-solid', getTypeIcon(data.matchedSchedule.type)]"></i>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-0.5">
+                  <span class="text-sm font-bold text-gray-800 truncate">{{ data.matchedSchedule.content }}</span>
+                  <span :class="['text-[10px] px-1.5 py-0.5 rounded-full font-medium', getTypeColor(data.matchedSchedule.type)]">
+                    {{ getTypeLabel(data.matchedSchedule.type) }}
+                  </span>
+                </div>
+                <div class="text-xs text-gray-400">
+                  {{ formatDate(data.matchedSchedule.date) }} · {{ data.matchedSchedule.startTime }} - {{ data.matchedSchedule.endTime }}
+                  <span v-if="data.matchedSchedule.location" class="ml-1">
+                    · <i class="fa-solid fa-location-dot"></i> {{ data.matchedSchedule.location }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="flex gap-2 mt-3">
+              <button
+                @click="emit('confirm', data.matchedSchedule!.id)"
+                class="flex-1 px-3 py-2 bg-red-500 text-white text-xs font-medium rounded-lg hover:bg-red-600 transition"
+              >
+                <i class="fa-solid fa-trash-can mr-1"></i> 确认取消
+              </button>
+              <button
+                @click="showAll = true"
+                class="flex-1 px-3 py-2 bg-gray-100 text-gray-600 text-xs font-medium rounded-lg hover:bg-gray-200 transition"
+              >
+                <i class="fa-solid fa-arrows-rotate mr-1"></i> 不是这个
+              </button>
+            </div>
+          </div>
+        </div>
+      </template>
 
       <!-- 无匹配 或 用户点了"不是这个" -->
-      <div v-if="!data.matchedSchedule || showAll" class="mt-3">
+      <div v-if="!data.matchedSchedule && !data.batchMode || showAll" class="mt-3">
         <div class="text-xs text-gray-500 mb-2">
           <i class="fa-solid fa-list-check mr-1"></i>
           {{ data.matchedSchedule ? '请选择要取消的日程：' : '未找到匹配日程，请从列表选择：' }}
