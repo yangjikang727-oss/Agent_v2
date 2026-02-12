@@ -277,8 +277,8 @@ class Logger {
             results = results.filter(log => log.timestamp <= options.endTime!)
           }
 
-          // 排序（最新的在前）
-          results.sort((a, b) => b.timestamp - a.timestamp)
+          // 排序（按时间正序，最早的在前）
+          results.sort((a, b) => a.timestamp - b.timestamp)
 
           // 限制数量
           if (options?.limit) {
