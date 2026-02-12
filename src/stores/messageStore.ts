@@ -27,7 +27,7 @@ export const useMessageStore = defineStore('message', () => {
   let nextId = 1
 
   // 添加消息
-  function addMessage(message: Omit<Message, 'id' | 'timestamp'>) {
+  function addMessage(message: Omit<Message, 'id' | 'timestamp'>): number {
     const newMessage = {
       ...message,
       id: nextId++,
@@ -43,6 +43,7 @@ export const useMessageStore = defineStore('message', () => {
         : `[${newMessage.type}]`,
       hasData: !!newMessage.data
     })
+    return newMessage.id
   }
 
   // 添加用户消息
@@ -65,8 +66,8 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   // 添加带数据的消息
-  function addDataMessage(type: MessageType, content: string, data: Message['data'], thoughts?: string[]) {
-    addMessage({
+  function addDataMessage(type: MessageType, content: string, data: Message['data'], thoughts?: string[]): number {
+    return addMessage({
       role: 'system',
       type,
       content,

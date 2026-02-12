@@ -13,7 +13,6 @@ import type {
   ConflictResolutionData,
   ScheduleQueryResultData,
   IntentData,
-  TransportMode,
   BrainMode
 } from './types'
 
@@ -34,6 +33,18 @@ import { logger } from './utils/logger'
 // Composables
 import { useBrain } from './composables/useBrain'
 import { useSpeech } from './composables/useSpeech'
+
+// 表单对话式填充相关
+import { getMissingFields } from './services/react/formFields'
+import { 
+  buildFormExtractionPrompt,
+  buildAskFieldPrompt, 
+  buildFormCompleteMessage,
+  buildFormStartMessage,
+  parseExtractedFields,
+  processTimeFields,
+  processRelativeDates
+} from './services/react/formCompletionPrompts'
 
 // Components
 import ChatPanel from './components/chat/ChatPanel.vue'
@@ -369,7 +380,7 @@ async function processInputWithReAct(text: string) {
         )
         
         if (createMeetingStep && createMeetingStep.actionInput) {
-          logger.info('App/ReAct', '→ 触发会议创建表单')
+          logger.info('App/ReAct', '→ 触发会议创建表单（对话式填充）')
           logger.debug('App/ReAct', '表单数据:', createMeetingStep.actionInput.formData)
           const formData = createMeetingStep.actionInput.formData || {}
           
@@ -406,27 +417,120 @@ async function processInputWithReAct(text: string) {
             attendees = formData.attendees.split(/[,，、\s]+/).filter(Boolean)
           }
           
-          messageStore.addDataMessage('create_meeting', '', {
+          // 准备表单数据
+          const meetingFormData = {
             title: formData.title || '',
+            date: dateStr,                // 存储日期，供对话式填充时使用
             startTime: startTimeLocal,
             endTime: endTimeLocal,
             location: formData.location || '',
             roomType: formData.roomType || '',
             attendees,
             remarks: formData.remarks || '',
-            status: 'draft'
-          } as import('./types').CreateMeetingData)
+            status: 'draft' as const,
+            timePeriod: formData.timePeriod as 'morning' | 'afternoon' | 'evening' | undefined  // 时间偏好
+          }
+          
+          // 计算缺失字段
+          const missingFields = getMissingFields(meetingFormData, 'meeting')
+          
+          // 如果有缺失字段，进入对话式填充模式
+          if (missingFields.length > 0) {
+            // 添加折叠状态的表单消息
+            const msgId = messageStore.addDataMessage('create_meeting', '', {
+              ...meetingFormData,
+              collapsed: true,
+              missingFields
+            } as import('./types').CreateMeetingData)
+            
+            // 进入表单填充模式
+            brain.setMode('FILLING_MEETING_FORM')
+            brain.state.value.activeFormMsgId = msgId
+            brain.state.value.activeFormType = 'meeting'
+            
+            // 生成开始消息并询问第一个字段
+            const filledFields = Object.keys(meetingFormData).filter(k => {
+              const v = (meetingFormData as any)[k]
+              return v && v !== '' && !(Array.isArray(v) && v.length === 0)
+            })
+            const startMsg = buildFormStartMessage('meeting', filledFields.filter(f => ['title', 'startTime', 'location'].includes(f)))
+            const firstMissing = missingFields[0]
+            if (firstMissing) {
+              brain.state.value.currentAskingField = firstMissing
+              // 如果有时间偏好，存储到 brain.state.draft 供快捷建议使用
+              if (formData.timePeriod) {
+                brain.state.value.draft = { ...brain.state.value.draft, timePeriod: formData.timePeriod }
+              }
+              const askText = buildAskFieldPrompt('meeting', firstMissing, meetingFormData)
+              messageStore.addSystemMessage(`${startMsg}${askText}`)
+            }
+          } else {
+            // 必填字段已完整，直接展开表单
+            messageStore.addDataMessage('create_meeting', '', {
+              ...meetingFormData,
+              collapsed: false,
+              missingFields: []
+            } as import('./types').CreateMeetingData)
+            messageStore.addSystemMessage('会议信息已完善，请确认并提交：')
+          }
           hasModalAction = true
         } else if (createTripStep && createTripStep.actionInput) {
-          logger.info('App/ReAct', '→ 触发出差申请表单')
+          logger.info('App/ReAct', '→ 触发出差申请表单（对话式填充）')
           logger.debug('App/ReAct', '表单数据:', createTripStep.actionInput.formData)
           const tripFormData = createTripStep.actionInput.formData || {}
-          messageStore.addDataMessage('trip_application', '', {
-            ...tripFormData,
+          
+          // 准备表单数据（不设默认值，缺失的字段会进入对话式填充）
+          const tripData = {
+            startDate: tripFormData.startDate || tripFormData.date || '',
+            endDate: tripFormData.endDate || '',
+            startTime: tripFormData.startTime || '',  // 不设默认值，需要用户提供
+            endTime: tripFormData.endTime || '',      // 不设默认值，需要用户提供
+            from: tripFormData.from || '',
+            to: tripFormData.to || '',
+            transport: tripFormData.transport || '',
+            reason: tripFormData.reason || '',
             scheduleId: '',
             taskId: createTripStep.actionInput.taskId || `TRIP-${Date.now()}`,
-            status: 'draft'
-          } as import('./types').TripApplicationData)
+            status: 'draft' as const
+          }
+          
+          // 计算缺失字段
+          const missingFields = getMissingFields(tripData, 'trip')
+          
+          // 如果有缺失字段，进入对话式填充模式
+          if (missingFields.length > 0) {
+            const msgId = messageStore.addDataMessage('trip_application', '', {
+              ...tripData,
+              collapsed: true,
+              missingFields
+            } as import('./types').TripApplicationData)
+            
+            // 进入表单填充模式
+            brain.setMode('FILLING_TRIP_FORM')
+            brain.state.value.activeFormMsgId = msgId
+            brain.state.value.activeFormType = 'trip'
+            
+            // 生成开始消息并询问第一个字段
+            const filledFields = Object.keys(tripData).filter(k => {
+              const v = (tripData as any)[k]
+              return v && v !== '' && !(Array.isArray(v) && v.length === 0)
+            })
+            const startMsg = buildFormStartMessage('trip', filledFields.filter(f => ['from', 'to', 'startDate'].includes(f)))
+            const firstMissing = missingFields[0]
+            if (firstMissing) {
+              brain.state.value.currentAskingField = firstMissing
+              const askText = buildAskFieldPrompt('trip', firstMissing, tripData)
+              messageStore.addSystemMessage(`${startMsg}${askText}`)
+            }
+          } else {
+            // 必填字段已完整，直接展开表单
+            messageStore.addDataMessage('trip_application', '', {
+              ...tripData,
+              collapsed: false,
+              missingFields: []
+            } as import('./types').TripApplicationData)
+            messageStore.addSystemMessage('出差申请信息已完善，请确认并提交：')
+          }
           hasModalAction = true
         }
         
@@ -1132,6 +1236,14 @@ function handleSend(text: string) {
   
   messageStore.addUserMessage(text)
   
+  // 检查是否处于表单填充模式
+  if (brain.state.value.mode === 'FILLING_MEETING_FORM' || brain.state.value.mode === 'FILLING_TRIP_FORM') {
+    const formType = brain.state.value.mode === 'FILLING_MEETING_FORM' ? 'meeting' : 'trip'
+    logger.info('App', `→ 表单填充模式，类型: ${formType}`)
+    handleFormFieldInput(text, formType)
+    return
+  }
+  
   // 优先处理特殊模式（与 ReAct/传统模式无关）
   // 这些模式均为等待用户补充信息的中间状态，需要统一由 processInput 处理
   const specialModes: BrainMode[] = [
@@ -1158,6 +1270,127 @@ function handleSend(text: string) {
   } else {
     logger.info('App', '→ 调用传统模式处理')
     processInput(text)
+  }
+}
+
+/**
+ * 处理表单填充模式下的用户输入
+ */
+async function handleFormFieldInput(input: string, formType: 'meeting' | 'trip') {
+  const activeFormMsgId = brain.state.value.activeFormMsgId
+  if (!activeFormMsgId) {
+    logger.error('App/Form', '表单填充模式但无 activeFormMsgId')
+    brain.reset()
+    return
+  }
+  
+  // 获取当前表单数据
+  const currentMsg = messageStore.getMessage(activeFormMsgId)
+  if (!currentMsg || !currentMsg.data) {
+    logger.error('App/Form', '找不到表单消息')
+    brain.reset()
+    return
+  }
+  
+  const currentData = currentMsg.data as Record<string, any>
+  const currentMissingFields = currentData.missingFields || getMissingFields(currentData, formType)
+  
+  logger.info('App/Form', `当前缺失字段: ${currentMissingFields.join(', ')}`)
+  
+  brain.startThinking('分析输入...')
+  
+  try {
+    // 调用 LLM 提取字段值
+    const { callLLMRawChat } = await import('./services/core/llmCore')
+    const currentAskingField = brain.state.value.currentAskingField || undefined
+    const extractPrompt = buildFormExtractionPrompt(formType, currentMissingFields, input, currentAskingField)
+    
+    const llmResponse = await callLLMRawChat([
+      { role: 'system', content: '你是一个表单字段提取助手，请从用户输入中提取相关字段值。' },
+      { role: 'user', content: extractPrompt }
+    ], {
+      provider: configStore.llmProvider,
+      apiKey: configStore.llmApiKey,
+      apiUrl: configStore.llmApiUrl,
+      model: configStore.llmModel
+    })
+    
+    logger.debug('App/Form', 'LLM 提取结果:', llmResponse)
+    
+    // 解析提取的字段
+    let extractedFields = parseExtractedFields(llmResponse || '{}')
+    
+    // 处理相对日期转换（后天、明天等 → 具体日期）
+    extractedFields = processRelativeDates(extractedFields, currentData.startDate)
+    
+    // 处理时间相关的智能转换（时长 → 结束时间）
+    extractedFields = processTimeFields(extractedFields, currentData)
+    
+    // 会议表单：时间格式转换为 datetime-local 格式 "YYYY-MM-DDTHH:mm"
+    // 出差表单：时间保持纯时间格式 "HH:mm"
+    if (formType === 'meeting') {
+      // 日期来源优先级：表单的 date 字段 > startTime 中的日期部分 > 当天日期
+      const dateFromForm = currentData.date 
+                        || currentData.startTime?.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] 
+                        || new Date().toISOString().split('T')[0]
+      
+      if (extractedFields.startTime && !extractedFields.startTime.includes('T') && !extractedFields.startTime.includes('-')) {
+        // 纯时间格式，需要加上日期
+        extractedFields.startTime = `${dateFromForm}T${extractedFields.startTime}`
+      }
+      if (extractedFields.endTime && !extractedFields.endTime.includes('T') && !extractedFields.endTime.includes('-')) {
+        extractedFields.endTime = `${dateFromForm}T${extractedFields.endTime}`
+      }
+    }
+    // 出差表单的 startTime/endTime 保持纯时间格式，无需转换
+    
+    logger.info('App/Form', '提取到的字段:', extractedFields)
+    
+    // 合并更新表单数据
+    const newData = { ...currentData, ...extractedFields }
+    
+    // 重新计算缺失字段
+    const newMissingFields = getMissingFields(newData, formType)
+    newData.missingFields = newMissingFields
+    
+    logger.info('App/Form', `更新后缺失字段: ${newMissingFields.join(', ')}`)
+    
+    // 更新消息数据 - 使用类型断言
+    if (formType === 'meeting') {
+      messageStore.updateMessage(activeFormMsgId, { data: newData as import('./types').CreateMeetingData })
+    } else {
+      messageStore.updateMessage(activeFormMsgId, { data: newData as import('./types').TripApplicationData })
+    }
+    
+    brain.stopThinking()
+    
+    // 检查是否完成
+    if (newMissingFields.length === 0) {
+      // 先发送确认提示消息
+      messageStore.addSystemMessage(buildFormCompleteMessage(formType))
+      
+      // 然后新增一条展开的表单消息（让用户在最新位置看到完整表单）
+      newData.collapsed = false
+      if (formType === 'meeting') {
+        messageStore.addDataMessage('create_meeting', '', newData as import('./types').CreateMeetingData)
+      } else {
+        messageStore.addDataMessage('trip_application', '', newData as import('./types').TripApplicationData)
+      }
+      
+      brain.reset()
+    } else {
+      // 继续询问下一个字段
+      const nextField = newMissingFields[0]
+      if (nextField) {
+        brain.state.value.currentAskingField = nextField
+        const askText = buildAskFieldPrompt(formType, nextField, newData)
+        messageStore.addSystemMessage(askText)
+      }
+    }
+  } catch (err) {
+    logger.error('App/Form', '表单字段提取失败', err as Error)
+    brain.stopThinking()
+    messageStore.addSystemMessage('抱歉，我没有理解您的输入，请再说一遍。')
   }
 }
 

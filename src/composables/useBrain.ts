@@ -14,7 +14,11 @@ export function useBrain() {
     mode: 'IDLE',
     pendingTask: null,
     isGeneratingAgenda: false,
-    generatingId: null
+    generatingId: null,
+    // 表单填充模式相关
+    activeFormMsgId: null,
+    activeFormType: null,
+    currentAskingField: null
   })
   
   // ReAct相关状态
@@ -67,6 +71,52 @@ export function useBrain() {
         return ['上午 8 点', '上午 10 点', '下午 2 点', '下午 4 点']
       case 'WAIT_RECOMMEND_HOTEL_LOC':
         return ['国贸附近', '中关村', '陆家嘴', '天府广场']
+      case 'FILLING_MEETING_FORM': {
+        // 根据当前询问字段提供建议
+        const field = state.value.currentAskingField
+        const timePeriod = state.value.draft?.timePeriod
+        switch (field) {
+          case 'startTime':
+            // 根据时间偏好提供不同的建议
+            if (timePeriod === 'morning') {
+              return ['9:00', '9:30', '10:00', '10:30']
+            } else if (timePeriod === 'afternoon') {
+              return ['14:00', '14:30', '15:00', '15:30']
+            } else if (timePeriod === 'evening') {
+              return ['18:00', '19:00', '20:00']
+            }
+            return ['9:00', '10:00', '14:00', '15:00']
+          case 'endTime':
+            return ['1小时', '半小时', '2小时', '16:00']
+          case 'roomType':
+            return ['大型会议室', '中型会议室', '小型会议室', '线上会议']
+          case 'location':
+            return ['A会议室', 'B会议室', '1号楼大厅']
+          default:
+            return []
+        }
+      }
+      case 'FILLING_TRIP_FORM': {
+        // 根据当前询问字段提供建议
+        const field = state.value.currentAskingField
+        switch (field) {
+          case 'transport':
+            return ['飞机', '火车', '汽车']
+          case 'from':
+            return ['珠海', '深圳', '广州']
+          case 'to':
+            return ['北京', '上海', '杭州']
+          case 'startDate':
+          case 'endDate':
+            return ['今天', '明天', '后天']
+          case 'startTime':
+            return ['8:00', '9:00', '10:00', '14:00']
+          case 'endTime':
+            return ['17:00', '18:00', '19:00', '20:00']
+          default:
+            return []
+        }
+      }
       default:
         return []
     }
@@ -165,6 +215,10 @@ export function useBrain() {
     state.value.isThinking = false
     state.value.statusText = '在线'
     state.value.pendingTask = null
+    // 重置表单填充状态
+    state.value.activeFormMsgId = null
+    state.value.activeFormType = null
+    state.value.currentAskingField = null
   }
 
   // 设置待处理任务

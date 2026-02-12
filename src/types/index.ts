@@ -23,6 +23,11 @@ export type BrainMode =
   | 'WAIT_AUTO_EXEC_CONFIRM'  // 等待自动执行推荐技能的确认
   | 'WAIT_RECOMMEND_TRANSPORT_TIME'  // 等待用户输入出行时间偏好
   | 'WAIT_RECOMMEND_HOTEL_LOC'       // 等待用户输入酒店商圈偏好
+  | 'FILLING_MEETING_FORM'           // 对话式填充会议表单
+  | 'FILLING_TRIP_FORM'              // 对话式填充出差表单
+
+// 表单填充模式的类型
+export type FormFillingType = 'meeting' | 'trip'
 
 // AI 大脑状态
 export interface BrainState {
@@ -34,6 +39,10 @@ export interface BrainState {
   pendingTask: import('./task').Task | null
   isGeneratingAgenda: boolean
   generatingId: string | null
+  // 表单填充模式相关
+  activeFormMsgId: number | null       // 当前正在填充的表单消息ID
+  activeFormType: FormFillingType | null  // 当前表单类型
+  currentAskingField: string | null    // 当前正在询问的字段名
 }
 
 // 日程草稿 (创建过程中的临时数据)
@@ -52,6 +61,7 @@ export interface ScheduleDraft {
   hotelLocation?: string  // 酒店商圈/地点
   scheduleId?: string     // 关联的日程ID
   autoExecTaskIds?: string[]  // 待自动执行的任务ID列表
+  timePeriod?: 'morning' | 'afternoon' | 'evening'  // 时间偏好（上午/下午/晚上）
 }
 
 // Gemini 意图解析结果

@@ -12,7 +12,10 @@ action: open_create_meeting_modal
 ## 工作流程
 1. 阅读下方参数说明表格，了解所有可提取的参数
 2. 从用户原始输入中提取尽可能多的参数值（提取不到的不传）
-3. 将日期时间转换为标准格式（如"下午6点" → "18:00"，"今天" → 具体日期）
+3. 时间转换规则：
+   - **具体时间**（如"下午3点"、"9:00"、"15点30"）→ 转换为 HH:mm 格式
+   - **模糊时间范围**（如"上午"、"下午"、"晚上"）→ 不要转换为具体时间，startTime 留空
+   - 日期（如"今天"、"明天"）→ 转换为 YYYY-MM-DD 格式
 4. 调用 trigger_action 工具，传入提取的参数：
    ```
    Action: trigger_action
@@ -36,6 +39,11 @@ action: open_create_meeting_modal
 用户输入："今天下午6点架构师例会"（假设今天是 2026-02-11）
 → 提取：title="架构师例会", date="2026-02-11", startTime="18:00"
 → 调用：trigger_action({ action: "open_create_meeting_modal", params: { title: "架构师例会", date: "2026-02-11", startTime: "18:00" } })
+
+用户输入："明天上午部门例会，在A211"（假设今天是 2026-02-11）
+→ "上午"是模糊时间范围，不要转换为具体时间
+→ 提取：title="部门例会", date="2026-02-12", location="A211"（注意：startTime 留空）
+→ 调用：trigger_action({ action: "open_create_meeting_modal", params: { title: "部门例会", date: "2026-02-12", location: "A211" } })
 
 ## 重要规则
 - 识别到会议意图后，跳过所有解释和确认，直接触发

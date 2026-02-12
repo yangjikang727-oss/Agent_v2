@@ -112,6 +112,9 @@ export interface TripApplicationData {
   reason: string          // 出差理由
   status: 'draft' | 'submitted' | 'approved' | 'rejected'  // 申请状态
   submittedAt?: string    // 提交时间
+  // 对话式填充相关
+  collapsed?: boolean          // 是否折叠显示
+  missingFields?: string[]     // 缺失的必填字段名
 }
 
 // 通知选项数据
@@ -256,13 +259,18 @@ export interface ScheduleQueryItem {
 // 会议创建表单数据
 export interface CreateMeetingData {
   title: string
-  startTime: string       // datetime-local 格式
+  date?: string             // 会议日期 YYYY-MM-DD（用于对话式填充时的日期来源）
+  startTime: string         // datetime-local 格式
   endTime: string
   location: string
   roomType: string
   attendees: string[]
   remarks: string
   status: 'draft' | 'submitted'  // draft=可编辑, submitted=锁定
+  // 对话式填充相关
+  collapsed?: boolean          // 是否折叠显示
+  missingFields?: string[]     // 缺失的必填字段名
+  timePeriod?: 'morning' | 'afternoon' | 'evening'  // 时间偏好（用于快捷建议）
 }
 
 // 日程查询结果数据

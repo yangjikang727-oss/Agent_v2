@@ -115,7 +115,8 @@ function tryQuickSkillMatch(query: string, currentDate: string): QuickMatchResul
         params: {
           title: extractTitle(normalizedQuery, 'meeting'),
           startTime: timeMatch ? extractTime(normalizedQuery) : undefined,
-          date: dateMatch ? extractDate(normalizedQuery, currentDate) : currentDate
+          date: dateMatch ? extractDate(normalizedQuery, currentDate) : currentDate,
+          timePeriod: extractTimePeriod(normalizedQuery)  // 时间偏好（上午/下午/晚上）
         }
       }
     }
@@ -190,20 +191,40 @@ function extractTitle(query: string, type: 'meeting' | 'trip'): string {
 
 /**
  * 从查询中提取时间
+ * 只提取明确的时间点，不将"上午/下午"等模糊时间转换为具体时间
  */
 function extractTime(query: string): string | undefined {
+  // 匹配具体时间：如 "3点"、"15:00"、"下午3点"
   const hourMatch = query.match(/(\d{1,2})[:点](\d{0,2})/)
   if (hourMatch && hourMatch[1]) {
-    const hour = parseInt(hourMatch[1])
+    let hour = parseInt(hourMatch[1])
     const minute = hourMatch[2] ? parseInt(hourMatch[2]) : 0
+    
+    // 处理12小时制：如果是下午且小时<12，加12
+    if (query.includes('下午') && hour < 12) {
+      hour += 12
+    }
+    // 如果是晚上且小时<12，加12
+    if (query.includes('晚上') && hour < 12) {
+      hour += 12
+    }
+    
     return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
   }
   
-  // 上午/下午
-  if (query.includes('上午')) return '09:00'
-  if (query.includes('下午')) return '14:00'
-  if (query.includes('晚上')) return '19:00'
-  
+  // "上午"、"下午"、"晚上" 只是时间范围，不是具体时间
+  // 不应转换为默认时间，应该让用户明确指定
+  return undefined
+}
+
+/**
+ * 从查询中提取时间偏好（上午/下午/晚上）
+ * 用于在对话式填充时提供相关的快捷建议
+ */
+function extractTimePeriod(query: string): 'morning' | 'afternoon' | 'evening' | undefined {
+  if (query.includes('上午')) return 'morning'
+  if (query.includes('下午')) return 'afternoon'
+  if (query.includes('晚上')) return 'evening'
   return undefined
 }
 
