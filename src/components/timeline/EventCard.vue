@@ -15,14 +15,14 @@ const emit = defineEmits<{
 }>()
 
 // 时间轴边界常量
-const TIMELINE_START = '07:00'  // 时间轴起始
+const TIMELINE_START = '08:00'  // 时间轴起始（与 TimelineView 时间标签一致）
 const TIMELINE_END = '21:00'    // 时间轴结束
 
 /**
  * 计算跨天日程在当前查看日期的有效显示时间范围
  * - 出发日：startTime → 21:00
- * - 返程日：07:00 → endTime
- * - 中间日：07:00 → 21:00（全天）
+ * - 返程日：08:00 → endTime
+ * - 中间日：08:00 → 21:00（全天）
  */
 const effectiveTimeRange = computed(() => {
   const s = props.schedule

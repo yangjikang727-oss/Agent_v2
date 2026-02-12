@@ -15,16 +15,20 @@ export function getWeekDay(date: string): string {
 
 /**
  * 计算时间轴上的位置 (px)
+ * 时间轴显示 8:00 - 21:00，每小时 80px
+ * 注意：需要加上 20px 的偏移以对齐背景网格线
  */
 export function calculateTimePosition(
   time: string, 
   hourHeight: number = 80, 
-  startHour: number = 7
+  startHour: number = 8
 ): number {
   const parts = time.split(':').map(Number)
   const h = parts[0] || 0
   const m = parts[1] || 0
-  return (h - startHour) * hourHeight + (m / 60) * hourHeight
+  // 加上 20px 偏移以对齐背景网格线（背景线从 20px 开始）
+  const offset = 20
+  return (h - startHour) * hourHeight + (m / 60) * hourHeight + offset
 }
 
 /**
